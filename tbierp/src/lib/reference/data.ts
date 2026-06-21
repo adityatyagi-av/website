@@ -1,36 +1,56 @@
+import { incubationReferencePages } from "./incubation-data";
+
 export const referenceCategories = [
   {
     label: "Portal Overview",
     pages: ["introduction", "ecosystem-architecture"],
   },
   {
-    label: "Startup Portal",
-    pages: ["startup-profile", "applications", "networking"],
-  },
-  {
-    label: "Mentor Portal",
-    pages: ["mentorship-marketplace", "session-scheduling"],
-  },
-  {
-    label: "Investor Portal",
-    pages: ["startup-discovery", "investment-opportunities"],
-  },
-  {
-    label: "Incubator Portal",
+    label: "Incubation Portal",
     pages: [
-      "startup-applications",
-      "evaluation-panel",
-      "program-management",
-      "funding-tracking",
+      "incubation-overview",
+      "incubation-user-role-management",
+      "incubation-program-creation",
+      "incubation-program-management",
+      "incubation-evaluation-panel",
+      "incubation-startup-management",
+      "incubation-office-space",
+      "incubation-facility-management",
+      "incubation-funding",
+      "incubation-announcements",
+      "incubation-task-management",
+      "incubation-mentor-management",
+      "incubation-billing-notifications",
+      "incubation-public-repository",
     ],
   },
   {
-    label: "Freelancer Portal",
-    pages: ["talent-marketplace", "project-collaboration"],
+    label: "Startup Portal",
+    pages: [
+      "startup-profile",
+      "applications",
+      "networking",
+    ],
+  },
+  {
+    label: "Mentor Portal",
+    pages: [
+      "mentorship-marketplace",
+      "session-scheduling",
+    ],
+  },
+  {
+    label: "EcoSync Platform",
+    pages: [
+      "startup-discovery",
+      "investment-opportunities",
+      "talent-marketplace",
+      "project-collaboration",
+    ],
   },
 ];
 
-export const referencePages = [
+const coreReferencePages = [
   {
     slug: "introduction",
     title: "Introduction",
@@ -50,12 +70,12 @@ export const referencePages = [
           "EcoSync is a comprehensive startup ecosystem platform that connects startups, mentors, investors, VC firms, freelancers, incubators, and professionals in a unified digital environment. It operates as two distinct products sharing a common backend and database.",
       },
       {
-        heading: "Product A: Ecosystem Platform",
+        heading: "Product A: Ecosystem Platform (ecosync.network)",
         content:
-          "The Ecosystem Platform (ecosync.co.in) is a single, integrated platform where all user types coexist. Think of it as LinkedIn meets AngelList for the startup ecosystem. It features social networking, job board, events, communities, mentorship marketplace, networking/discovery, and messaging.",
+          "The Ecosystem Platform is a single, integrated platform where all user types coexist. Think of it as LinkedIn meets AngelList for the startup ecosystem. It features social networking, job board, events, communities, mentorship marketplace, networking/discovery, messaging, and workspace access to the Startup Portal and Mentor Portal.",
       },
       {
-        heading: "Product B: Incubation Portal",
+        heading: "Product B: Incubation Portal (ecosync.co)",
         content:
           "The Incubation Portal is a multi-tenant SaaS product for incubators and accelerators. Each incubator gets their own white-labeled portal with a custom subdomain. Features include program management, startup pipeline, evaluation panels, office/facility management, funding disbursement, task management, mentor management, and announcements.",
       },
@@ -103,8 +123,8 @@ export const referencePages = [
         content:
           "The backend organizes endpoints by portal context to ensure clean separation of concerns and security boundaries between products.",
         list: [
-          "/api/ecosystem/* — Ecosystem Platform APIs",
-          "/api/incubation/* — Incubation admin onboarding and auth APIs",
+          "/api/ecosystem/* — Ecosystem Platform APIs (social, jobs, events, communities, mentorship)",
+          "/api/incubation/* — Incubation admin onboarding and subscription APIs",
           "/api/incubation-portal/* — Incubation Portal feature APIs (requires tenantKey header)",
           "/api/startup-portal/* — Startup-side view of incubation features",
           "/api/mentor/* — Mentor's own management portal",
@@ -446,7 +466,7 @@ export const referencePages = [
   {
     slug: "startup-discovery",
     title: "Startup Discovery",
-    category: "Investor Portal",
+    category: "EcoSync Platform",
     description:
       "Investors use the discovery tools to find, evaluate, and add startups to their deal flow pipeline across all funding stages and sectors.",
     learn: [
@@ -500,7 +520,7 @@ export const referencePages = [
   {
     slug: "investment-opportunities",
     title: "Investment Opportunities",
-    category: "Investor Portal",
+    category: "EcoSync Platform",
     description:
       "Manage portfolio investments, co-invest via syndicates, and track performance across all active and exited positions.",
     learn: [
@@ -550,217 +570,9 @@ export const referencePages = [
     ],
   },
   {
-    slug: "startup-applications",
-    title: "Startup Applications",
-    category: "Incubator Portal",
-    description:
-      "Incubation admins manage the full lifecycle of startup applications, from discovery and intake through evaluation, verification, and onboarding.",
-    learn: [
-      "How incubators receive and manage applications",
-      "How to request changes or documents from applicants",
-      "How to track the full application audit trail",
-      "How to assign startups to programs",
-    ],
-    sections: [
-      {
-        heading: "Application Management",
-        content:
-          "Incubation admins can view all incoming applications with search and filter capabilities. Each application shows the current status, program association, and startup details.",
-      },
-      {
-        heading: "Admin Actions",
-        list: [
-          "Review application details and answers",
-          "Request changes to submitted information",
-          "Request additional supporting documents",
-          "Assign applications to panel members for evaluation",
-          "Move applications through status stages",
-          "Onboard or reject applicants",
-        ],
-      },
-      {
-        heading: "Application History",
-        content:
-          "Every status change is logged with a timestamp, the user who made the change, and an optional comment. This creates a complete audit trail for compliance and transparency.",
-      },
-      {
-        heading: "Startup Association Statuses",
-        list: [
-          "ONBOARDED — startup accepted and added to the incubator",
-          "ACTIVE — startup actively participating",
-          "SUSPENDED — access temporarily restricted",
-          "OFFBOARDED — startup has exited the incubator",
-        ],
-      },
-    ],
-  },
-  {
-    slug: "evaluation-panel",
-    title: "Evaluation Panel",
-    category: "Incubator Portal",
-    description:
-      "The Evaluation Panel system enables structured scoring of startup applications by designated panel members using weighted criteria defined per program.",
-    learn: [
-      "How panel members are assigned to programs",
-      "How evaluation criteria and scoring works",
-      "How weighted scores are calculated",
-      "How evaluation summaries are generated",
-    ],
-    sections: [
-      {
-        heading: "Panel Setup",
-        content:
-          "Incubation admins invite panel members from existing incubation users. Panel members are assigned to specific programs and can only evaluate applications within their assigned programs.",
-      },
-      {
-        heading: "Evaluation Criteria",
-        content:
-          "Each program defines its own scoring criteria with weighted importance. Each criterion has multiple choice options, and each option has an associated score.",
-        list: [
-          "Question text and scoring rubric",
-          "Weightage (importance multiplier)",
-          "Multiple choice options each with a numeric score",
-          "Active/inactive toggle per criterion",
-          "Ordered display for consistent evaluation",
-        ],
-      },
-      {
-        heading: "Evaluation Flow",
-        list: [
-          "Panel member sees their assigned applications",
-          "Reviews full application details",
-          "Scores each criterion with optional comments",
-          "Saves as DRAFT or submits final evaluation",
-          "Multiple evaluators can score the same application",
-          "Evaluation summary aggregates all scores",
-        ],
-      },
-      {
-        heading: "Scoring Output",
-        list: [
-          "Per-evaluator score breakdown",
-          "Average score per criterion across all evaluators",
-          "Total weighted score for each application",
-          "Ranking capability to compare applicants",
-        ],
-      },
-    ],
-  },
-  {
-    slug: "program-management",
-    title: "Program Management",
-    category: "Incubator Portal",
-    description:
-      "Programs are the core organizational unit of the Incubation Portal. Admins create and manage incubation schemes, accelerator batches, and funding programs.",
-    learn: [
-      "How to create and configure a program",
-      "How custom application questions work",
-      "How to assign program managers",
-      "How funding is configured per program",
-    ],
-    sections: [
-      {
-        heading: "Program Setup",
-        list: [
-          "Title, description, cover image, and program logo",
-          "Objective, benefits, guidelines",
-          "Scheme type (incubation, acceleration, funding)",
-          "Eligibility and non-eligibility criteria",
-          "Expected outcomes",
-          "External links",
-        ],
-      },
-      {
-        heading: "Custom Application Questions",
-        content:
-          "Admins define the questions startups must answer when applying to a program. Question types support a wide range of input formats.",
-        list: [
-          "MCQ — multiple choice question",
-          "TEXT — short text answer",
-          "LONG_TEXT — detailed text response",
-          "FILE_UPLOAD — document or image upload",
-          "DATE — date picker",
-          "NUMBER — numeric input",
-          "CHECKBOX — multi-select options",
-          "DROPDOWN — single selection from a list",
-        ],
-      },
-      {
-        heading: "Funding Configuration",
-        list: [
-          "Total funding amount and currency (default INR)",
-          "Funding type: GRANT, EQUITY, DEBT, CONVERTIBLE_NOTE, REVENUE_SHARE",
-          "Funding availability toggle per program",
-        ],
-      },
-      {
-        heading: "Program Managers",
-        content:
-          "Incubation users can be designated as Program Managers for specific programs. Managers oversee their assigned programs and have elevated access to related startups and applications.",
-      },
-    ],
-  },
-  {
-    slug: "funding-tracking",
-    title: "Funding Tracking",
-    category: "Incubator Portal",
-    description:
-      "EcoSync provides comprehensive tools for tracking funding sources, program allocations, and disbursements to startups at the tranche or milestone level.",
-    learn: [
-      "How funding sources are recorded and categorized",
-      "How funds are allocated to programs",
-      "How disbursements are made to startups",
-      "How startups submit and track funding requests",
-    ],
-    sections: [
-      {
-        heading: "Funding Sources",
-        content:
-          "Incubators record where their funding originates. Each source is tracked with amount, dates, and reference documents.",
-        list: [
-          "GOVERNMENT_GRANT",
-          "CSR (Corporate Social Responsibility)",
-          "INTERNAL",
-          "ANGEL_FUND",
-          "VENTURE_FUND",
-          "CORPORATE",
-          "DONATION",
-          "OTHER",
-        ],
-      },
-      {
-        heading: "Program Allocation",
-        content:
-          "Funds from sources are allocated to specific programs. The system prevents over-allocation and tracks the ratio of allocated to available funds.",
-      },
-      {
-        heading: "Disbursements",
-        content:
-          "Funds are disbursed to startups in tranches, optionally linked to milestones. Each disbursement has a full lifecycle.",
-        list: [
-          "Disbursement types: GRANT, EQUITY, LOAN, PRIZE, SCHOLARSHIP, REIMBURSEMENT, OPERATING_EXPENSE",
-          "Status flow: PENDING → APPROVED → DISBURSED (or CANCELLED / ON_HOLD)",
-          "Tranche numbering for multi-stage disbursements",
-          "Supporting document attachment",
-        ],
-      },
-      {
-        heading: "Startup Funding Requests",
-        content:
-          "Startups can submit funding requests from within their program. Admins review, approve an amount (which may differ from the request), and auto-create the disbursement.",
-        list: [
-          "Submit request with amount and supporting note",
-          "Status: PENDING → APPROVED / REJECTED",
-          "Admin sets the approved disbursement amount",
-          "Approved requests automatically create disbursement records",
-        ],
-      },
-    ],
-  },
-  {
     slug: "talent-marketplace",
     title: "Talent Marketplace",
-    category: "Freelancer Portal",
+    category: "EcoSync Platform",
     description:
       "The Talent Marketplace allows startups and companies to discover and engage freelancers for short-term gigs, project-based work, or ongoing retainers.",
     learn: [
@@ -813,7 +625,7 @@ export const referencePages = [
   {
     slug: "project-collaboration",
     title: "Project Collaboration",
-    category: "Freelancer Portal",
+    category: "EcoSync Platform",
     description:
       "After a gig is accepted, freelancers and clients collaborate through structured project management tools including milestones, contracts, and payment tracking.",
     learn: [
@@ -874,7 +686,9 @@ export const referencePages = [
   },
 ];
 
-export function getPageBySlug(slug) {
+export const referencePages = [...coreReferencePages, ...incubationReferencePages];
+
+export function getPageBySlug(slug: string) {
   return referencePages.find((p) => p.slug === slug) || null;
 }
 
