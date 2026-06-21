@@ -1,4 +1,6 @@
 import { incubationReferencePages } from "./incubation-data";
+import { startupReferencePages } from "./startup-data";
+import { mentorReferencePages } from "./mentor-data";
 
 export const referenceCategories = [
   {
@@ -27,7 +29,15 @@ export const referenceCategories = [
   {
     label: "Startup Portal",
     pages: [
+      "startup-overview",
       "startup-profile",
+      "startup-program-discovery",
+      "startup-application-management",
+      "startup-funding-requests",
+      "startup-office-space",
+      "startup-facility-booking",
+      "startup-task-management",
+      "startup-announcements",
       "applications",
       "networking",
     ],
@@ -35,6 +45,18 @@ export const referenceCategories = [
   {
     label: "Mentor Portal",
     pages: [
+      "mentor-overview",
+      "mentor-profile-management",
+      "mentor-session-types",
+      "mentor-availability",
+      "mentor-session-management",
+      "mentor-video-sessions",
+      "mentor-packages",
+      "mentor-programs",
+      "mentor-incubator-associations",
+      "mentor-earnings",
+      "mentor-dashboard-analytics",
+      "mentor-announcements",
       "mentorship-marketplace",
       "session-scheduling",
     ],
@@ -686,7 +708,7 @@ const coreReferencePages = [
   },
 ];
 
-export const referencePages = [...coreReferencePages, ...incubationReferencePages];
+export const referencePages = [...coreReferencePages, ...incubationReferencePages, ...startupReferencePages, ...mentorReferencePages];
 
 export function getPageBySlug(slug: string) {
   return referencePages.find((p) => p.slug === slug) || null;
