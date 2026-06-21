@@ -28,6 +28,11 @@ export default function sitemap() {
     "reference",
     "products/ecosync",
     "blog",
+    "privacy-policy",
+    "terms-and-conditions",
+    "refund-policy",
+    "cookie-policy",
+    "shipping-and-returns",
   ];
 
   const blogPages = Array.isArray(allBlogs)

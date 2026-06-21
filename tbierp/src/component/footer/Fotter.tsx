@@ -62,6 +62,29 @@ const Footer = () => {
       pageLink: "/contact",
     },
   ];
+
+  const legalLinks = [
+    {
+      pageName: "Privacy Policy",
+      pageLink: "/privacy-policy",
+    },
+    {
+      pageName: "Terms & Conditions",
+      pageLink: "/terms-and-conditions",
+    },
+    {
+      pageName: "Refund Policy",
+      pageLink: "/refund-policy",
+    },
+    {
+      pageName: "Cookie Policy",
+      pageLink: "/cookie-policy",
+    },
+    {
+      pageName: "Shipping & Returns",
+      pageLink: "/shipping-and-returns",
+    },
+  ];
   return (
     <div className="mt-20 mb-0 pb-9 bg-[#FFFFFF] pt-10 px-10 sm:pt-20 sm:px-16 lg:pt-32 lg:px-28">
       {/* upper section */}
@@ -129,6 +152,18 @@ const Footer = () => {
             </Link>
           ))}
         </div>
+      </div>
+      {/* legal links */}
+      <div className="flex flex-wrap justify-center gap-4 sm:gap-6 mt-4 mb-6">
+        {legalLinks.map((page, index) => (
+          <Link
+            key={index}
+            href={page.pageLink}
+            className="text-[#666666] text-[13px] hover:text-[#000000] hover:underline transition-colors"
+          >
+            {page.pageName}
+          </Link>
+        ))}
       </div>
       <div
         className="w-full rounded-full inline-block"
