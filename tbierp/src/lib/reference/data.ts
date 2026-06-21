@@ -1,6 +1,7 @@
 import { incubationReferencePages } from "./incubation-data";
 import { startupReferencePages } from "./startup-data";
 import { mentorReferencePages } from "./mentor-data";
+import { ecosyncReferencePages } from "./ecosync-data";
 
 export const referenceCategories = [
   {
@@ -64,6 +65,16 @@ export const referenceCategories = [
   {
     label: "EcoSync Platform",
     pages: [
+      "ecosync-overview",
+      "ecosync-social-feed",
+      "ecosync-communities",
+      "ecosync-messaging",
+      "ecosync-events",
+      "ecosync-jobs",
+      "ecosync-career",
+      "ecosync-profile",
+      "ecosync-notifications",
+      "ecosync-settings",
       "startup-discovery",
       "investment-opportunities",
       "talent-marketplace",
@@ -708,7 +719,7 @@ const coreReferencePages = [
   },
 ];
 
-export const referencePages = [...coreReferencePages, ...incubationReferencePages, ...startupReferencePages, ...mentorReferencePages];
+export const referencePages = [...coreReferencePages, ...incubationReferencePages, ...startupReferencePages, ...mentorReferencePages, ...ecosyncReferencePages];
 
 export function getPageBySlug(slug: string) {
   return referencePages.find((p) => p.slug === slug) || null;
