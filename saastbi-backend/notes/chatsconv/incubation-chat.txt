@@ -1,0 +1,50 @@
+INCUBATION CHAT SYSTEM
+======================
+
+Overview:
+  Incubation tenants communicate through their linked Page identity.
+  Each Tenant has a pageId; the Page name and logo are used as display identity.
+
+Entity Type: TENANT (resolved via Page)
+
+Identity Resolution:
+  - Tenant -> tenant.page.name / tenant.page.logo
+  - Messages show the Page name to external recipients
+  - Internal team members see "Page Name (sent by FirstName LastName)"
+
+Who Can Send:
+  - Tenant admins (incubationUserTenant.isAdmin = true)
+  - Users with CHAT module permission having "C" (Create) action
+  - Permission resolved via: resolveTenantAccess + resolveUserPermissions
+
+Inbox Behavior:
+  - Tenant conversations appear ONLY in the incubation portal inbox
+  - Scoped by participant1Type/participant2Type = "TENANT"
+  - Personal user inbox never shows tenant conversations
+  - All tenant members with CHAT access can view conversations
+
+Multi-Member Visibility:
+  - All IncubationUserTenant members (isActive) see tenant conversations
+  - Real-time updates delivered via socket room "user:{tenantId}"
+  - Each member also joins "user:{incubationUserId}" room
+
+Internal Team Chat (INCUBATION_USER to INCUBATION_USER):
+  - Incubation users can message each other directly
+  - Uses INCUBATION_USER entity type for both participants
+  - Visible only within incubation portal
+  - contextType: "INCUBATION" for these conversations
+  - Display: shows incubation user's linked User name/avatar
+
+Socket Rooms:
+  - On connect: joins "user:{tenantId}" for each active tenant membership
+  - On connect: joins "user:{incubationUserId}" for incubation identity
+  - Notifications delivered to all tenant members
+
+Permission Flow:
+  1. User sends message with tenantId in request
+  2. validateSendPermission checks:
+     a. User has active IncubationUser record
+     b. IncubationUserTenant membership exists and isActive
+     c. Tenant has CHAT module enabled (resolveTenantAccess)
+     d. If not admin: user has "C" action on CHAT module
+  3. If all pass, message sent as senderType=TENANT, senderId=tenantId

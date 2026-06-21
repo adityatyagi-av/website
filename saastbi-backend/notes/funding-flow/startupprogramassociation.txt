@@ -1,0 +1,270 @@
+================================================================================
+STARTUP PROGRAM ASSOCIATION API REFERENCE
+================================================================================
+
+Base path (startup portal):  /api/startup-portal
+Auth:                        Bearer JWT (authenticate middleware)
+Header:                      Authorization: Bearer <token>
+
+Every startup-portal endpoint requires `startupId` (query or body). The server
+calls verifyUserStartupAccess(userId, startupId) to ensure the caller is an
+active member of that startup before answering.
+
+--------------------------------------------------------------------------------
+ENUMS (relevant subsets)
+--------------------------------------------------------------------------------
+StartupProgramStatus        ACTIVE | COMPLETED | DROPPED | ...
+RequestStatus               PENDING | APPROVED | RESOLVED | REJECTED | RECEIVED | REOPENED
+DocumentResponseStatus      SUBMITTED | WITHDRAWN
+StartupApplicationStatus    ... | DOCS_REQUESTED | DOCS_RECEIVED | REVIEWED | ONBOARDED | ...
+
+================================================================================
+SECTION A - ASSOCIATION ENDPOINTS (NEW)
+================================================================================
+
+1) GET /associations/overview
+   Query: startupId
+   Returns KPI block for the startup's dashboard header.
+   Response.data:
+   {
+     totalAssociations: number,
+     statusCounts: { ACTIVE: n, COMPLETED: n, ... },
+     totalApprovedFunding: number,
+     totalDisbursedFunding: number,
+     totalRemainingFunding: number
+   }
+
+2) GET /programs/associated           (already existed)
+   Query: startupId, page?, limit?, search?, sortBy?, order?, status?
+   Paginated list of StartupProgramAssociation rows with program, batch, tenant
+   and funding rollup.
+
+3) GET /association/:associationId
+   Query: startupId
+   Detail view of a single association.
+   Response.data:
+   {
+     associationId, status, onboardedAt, offboardedAt, isActive,
+     program: { id, title, description, programLogo, coverImage,
+                schemeTypeRef, governingBody, tenant, totalFundingAmount,
+                fundingType, fundingCurrency, isFundingAvailable },
+     tenant,
+     batch: { id, batchName, batchCode, status } | null,
+     application: { id, status, submittedAt, tenantId } | null,
+     funding: {
+       approvedFundingAmount, totalDisbursedAmount,
+       inFlightAmount, remainingAmount, currency
+     }
+   }
+
+4) GET /association/:associationId/dashboard
+   Query: startupId
+   One-shot bundle for the association detail page.
+   Response.data:
+   {
+     association: { id, status, onboardedAt, program, tenant, batch },
+     application: { id, status, submittedAt, tenantId } | null,
+     funding: {
+       approvedFundingAmount, totalDisbursedAmount,
+       inFlightAmount, remainingAmount, currency,
+       latestDisbursement: { id, amount, disbursedAt, status } | null
+     },
+     openCounts: {
+       documentRequests: number,
+       changeRequests: number,
+       dataCollection: number
+     }
+   }
+
+5) GET /association/:associationId/document-requests
+   Query: startupId
+   Doc requests for the application tied to this association.
+   Only requests with `visibleToAll = true` are returned.
+   Returns [] when no application exists yet.
+   Each item: { id, title, description, status, requestedAt, resolvedAt,
+                requestedBy, _count.responses }.
+
+6) GET /association/:associationId/change-requests
+   Query: startupId
+   Change requests tied to this association's application.
+   Only requests with `visibleToAll = true` are returned.
+   Returns [] when no application exists yet.
+   Each item: { id, title, description, type, status, requestedAt,
+                resolvedAt, requestedBy, _count.responses }.
+
+7) GET /association/:associationId/funding-summary
+   Query: startupId
+   latestDisbursement is scoped by association.batchId so multi-batch
+   programs don't leak a disbursement from a different batch.
+   Response.data:
+   {
+     approvedFundingAmount, totalDisbursedAmount,
+     inFlightAmount, remainingAmount, currency,
+     latestDisbursement: { id, amount, disbursedAt, status } | null
+   }
+
+================================================================================
+SECTION B - DOCUMENT SUBMISSION (NEW + REFACTORED)
+================================================================================
+
+Uploads: files are uploaded to S3 using presigned URLs via /s3 endpoints.
+These APIs accept only the resulting URL metadata.
+
+Request body pattern for submit/resubmit:
+{
+  "startupId": "stu_...",
+  "files": [
+    { "fileName": "pan.pdf", "fileUrl": "https://s3.../pan.pdf",
+      "fileType": "application/pdf", "sizeBytes": 48321 }
+  ],
+  "comment": "PAN + GST attached"
+}
+
+Legacy body `{ fileUrl, comment }` is still accepted on the old route.
+
+Endpoints:
+
+1) POST /application/:applicationId/document-request/:documentRequestId/response
+   Submit files for a PENDING doc request. Allowed when
+   DocumentRequest.status === PENDING. Wraps everything in a transaction:
+   - Creates DocumentResponse (status SUBMITTED) + DocumentResponseFile rows
+   - Flips DocumentRequest.status = RESOLVED
+   - If every doc request on the application is resolved,
+     StartupApplication.status -> DOCS_RECEIVED and writes ApplicationHistory.
+
+2) POST /application/:applicationId/document-request/:documentRequestId/resubmit
+   Used after an admin reopens a doc request. Allowed when
+   DocumentRequest.status === REOPENED. Creates a new DocumentResponse, flips
+   request back to RESOLVED. Previous response rows remain for audit.
+
+3) PATCH /document-response/:responseId/withdraw
+   Body: { startupId }
+   Only the original submitter may withdraw. Allowed while the parent
+   DocumentRequest is still RESOLVED. Sets DocumentResponse.status = WITHDRAWN.
+   If no SUBMITTED responses remain, flips DocumentRequest.status back to
+   PENDING.
+
+4) GET /document-responses
+   Query: startupId, applicationId?, documentRequestId?
+   List of my responses with their files[].
+
+5) GET /document-response/:responseId
+   Query: startupId
+   Single response with files[] and linked documentRequest summary.
+
+6) POST /application/respond-document           (LEGACY, DEPRECATED)
+   Body: { startupId, documentRequestId, fileUrl, comment? }
+   Thin wrapper around the new submit flow. Kept temporarily for existing
+   clients.
+
+================================================================================
+SECTION C - STATE MACHINES
+================================================================================
+
+DocumentRequest.status:
+   PENDING ----(startup submits)----> RESOLVED
+   RESOLVED ----(admin reopens)-----> REOPENED
+   REOPENED ---(startup resubmits)-> RESOLVED
+   RESOLVED --(last SUBMITTED resp withdrawn)--> PENDING
+
+DocumentResponse.status:
+   SUBMITTED <--(startup withdraws)--> WITHDRAWN
+
+StartupApplication.status transitions tied to docs:
+   * -> DOCS_REQUESTED    on admin requestDocument/bulkRequestDocuments/reopen
+   DOCS_REQUESTED -> DOCS_RECEIVED    when all requests become RESOLVED
+   (a request in REOPENED state counts as "open" for this calculation, so
+    DOCS_RECEIVED is only reached after every request is RESOLVED)
+
+Downstream effect on approveChange:
+   approveChange only promotes the application to REVIEWED when there are
+   zero PENDING/RECEIVED ChangeRequests AND zero PENDING/REOPENED
+   DocumentRequests. Reopening a doc request after REVIEWED does not demote
+   the status; it only demotes to DOCS_REQUESTED if the reopen itself runs.
+
+getApplicationById derived flag:
+   pendingDocumentRequests is true when any request has status PENDING or
+   REOPENED.
+
+================================================================================
+SECTION D - INCUBATION-SIDE COUNTERPARTS (updated)
+================================================================================
+
+Base path (incubation portal):  /api/incubation-portal
+Header:                          tenantkey: <tenantKey>
+Auth:                            authenticatePortal + requireAccess(PROGRAM_MANAGEMENT)
+
+1) POST  /application/request-document                (unchanged - creates request)
+2) POST  /bulk-request-documents                      (unchanged - bulk)
+3) GET   /program/:programId/document-requests        (response shape now
+           includes responses[].files[], comment, status)
+4) GET   /document-request/:documentRequestId         (NEW - full detail
+           including all responses and their files)
+5) GET   /document-response/:responseId               (NEW - single response
+           with files[])
+6) PATCH /document-request/:documentRequestId/reopen  (NEW)
+           Body: { comment? }
+           Validates current status === RESOLVED, flips to REOPENED, sets
+           application back to DOCS_REQUESTED with ApplicationHistory.
+
+================================================================================
+SECTION E - SCHEMA CHEAT SHEET (relevant subset)
+================================================================================
+
+model StartupProgramAssociation {
+  id, startupId, programId, tenantId, batchId?,
+  status (StartupProgramStatus), onboardedAt?, offboardedAt?, isActive,
+  approvedFundingAmount?, totalDisbursedAmount?,
+  @@unique([startupId, programId, batchId])
+}
+
+model DocumentRequest {
+  id, applicationId, tenantId, requestedById?, title?, description?,
+  status (RequestStatus - now includes REOPENED),
+  requestedAt, resolvedAt?, visibleToAll,
+  responses DocumentResponse[]
+}
+
+model DocumentResponse {                (fields added)
+  id, documentRequestId, respondedById,
+  fileUrl (legacy - mirrors files[0].fileUrl for back-compat),
+  comment?,
+  status (DocumentResponseStatus),
+  respondedAt,
+  files DocumentResponseFile[]
+}
+
+model DocumentResponseFile {            (NEW)
+  id, documentResponseId (FK cascade),
+  fileName, fileUrl, fileType?, sizeBytes?, uploadedAt
+}
+
+enum DocumentResponseStatus { SUBMITTED | WITHDRAWN }
+enum RequestStatus { PENDING | APPROVED | RESOLVED | REJECTED | RECEIVED | REOPENED }
+
+Migration: run `npx prisma migrate dev --name docs_submission_overhaul` after
+pulling. Existing rows default DocumentResponse.status to SUBMITTED. Legacy
+fileUrl column is preserved.
+
+================================================================================
+SECTION F - FRONTEND CHECKLIST
+================================================================================
+
+My Programs page
+  - GET /associations/overview for the header KPI band.
+  - GET /programs/associated for the list.
+
+Association detail page
+  - GET /association/:associationId/dashboard as the primary call.
+  - Drill-downs: /document-requests, /change-requests, /funding-summary.
+
+Document submission flow
+  1. Call /s3/get-signed-url (existing util) to upload each file to S3.
+  2. POST /application/:applicationId/document-request/:documentRequestId/response
+     with the collected { fileName, fileUrl, fileType, sizeBytes } objects.
+  3. Disable the submit button while DocumentRequest.status !== PENDING.
+  4. When admin reopens, show a banner and use the /resubmit route.
+  5. Show "Withdraw" only when the response belongs to the current user and
+     the parent request is still RESOLVED.
+
+================================================================================

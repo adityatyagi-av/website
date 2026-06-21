@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OPERNOVA INCUBATION ERP - Profile Verification</title>
+
+  <style>
+    /* Reset */
+    body, html {
+      margin: 0;
+      padding: 0;
+      background-color: #F8FAFC; /* Neutral Background */
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+      color: #0F172A; /* Dark Text */
+    }
+
+    .email-wrapper {
+      width: 100%;
+      padding: 20px 0;
+      background-color: #F8FAFC;
+    }
+
+    .email-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #FFFFFF;
+      border-radius: 16px;
+      box-shadow: 0 6px 16px rgba(0, 151, 254, 0.1);
+      overflow: hidden;
+    }
+
+    /* Header */
+    .email-header {
+      background: linear-gradient(83.79deg, #1B45B4 3.25%, #1C2792 96.85%);
+      color: #FFFFFF;
+      text-align: center;
+      padding: 24px 16px;
+    }
+
+    .email-header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+    }
+
+    /* Body */
+    .email-body {
+      padding: 32px 28px;
+    }
+
+    .email-body p {
+      font-size: 15px;
+      line-height: 1.7;
+      margin: 0 0 14px;
+      color: #0F172A;
+    }
+
+    .email-body p.muted {
+      color: #475569; /* Muted Text */
+      font-size: 14px;
+    }
+
+    .highlight {
+      background: linear-gradient(90deg, #5433FF 0%, #20BDFF 50%, #A5FECB 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-weight: 700;
+    }
+
+    /* Button */
+    .btn {
+      display: inline-block;
+      background-color: #0097FE;
+      color: #FFFFFF;
+      text-decoration: none;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 15px;
+      margin-top: 20px;
+      transition: background 0.2s ease-in-out;
+    }
+
+    .btn:hover {
+      background: linear-gradient(277deg, rgba(0,151,254,0) 8.72%, rgba(0,151,254,0.86) 91.5%);
+    }
+
+    /* Footer */
+    .email-footer {
+      text-align: center;
+      background-color: #F8FAFC;
+      padding: 20px;
+      font-size: 13px;
+      color: #475569;
+      border-top: 1px solid rgba(0,151,254,0.1);
+    }
+
+    .email-footer a {
+      color: #0097FE;
+      text-decoration: none;
+    }
+
+    .email-footer a:hover {
+      text-decoration: underline;
+    }
+
+    @media only screen and (max-width: 600px) {
+      .email-body {
+        padding: 24px 18px;
+      }
+      .btn {
+        padding: 10px 22px;
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="email-wrapper">
+    <div class="email-container">
+
+      <!-- HEADER -->
+      <div class="email-header">
+        <h1>Welcome to OPERNOVA INCUBATION ERP</h1>
+      </div>
+
+      <!-- BODY -->
+      <div class="email-body">
+        <p>Hi <strong><%= adminName || "there" %></strong>,</p>
+
+        <p>Your <span class="highlight">profile has been successfully verified</span> and your account is now active on the <strong>OPERNOVA INCUBATION ERP</strong> portal.</p>
+
+        <p>You can now log in and start managing your workspace, teams, and startup operations seamlessly.</p>
+
+        <p>
+          <a href="<%= loginUrl || '#' %>" class="btn">Go to Dashboard</a>
+        </p>
+
+        <p class="muted">If you didn’t create this account, please contact our support team immediately.</p>
+
+        <p style="margin-top: 32px;">Best regards,<br /><strong>Team OPERNOVA</strong></p>
+      </div>
+
+      <!-- FOOTER -->
+      <div class="email-footer">
+        <p>Need help? Contact us at 
+          <a href="mailto:<%= supportEmail %>"><%= supportEmail %></a>
+        </p>
+        <p>&copy; <%= new Date().getFullYear() %> OPERNOVA TECHNOLOGIES LLP. All rights reserved.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

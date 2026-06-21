@@ -1,0 +1,1023 @@
+================================================================================
+OFFICE PROVIDER API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 2.0.0
+Last Updated: 2026-01-18
+Base URL: /api/incubation-portal/office
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# OFFICE SPACE MANAGEMENT
+| Endpoint                           | Method | Purpose                                               |
+|------------------------------------|--------|-------------------------------------------------------|
+| /office/spaces                     | POST   | Create new office space with pricing options          |
+| /office/spaces                     | GET    | List all tenant's office spaces (paginated)           |
+| /office/spaces/:officeId           | GET    | Get single office details with allocations            |
+| /office/spaces/:officeId           | PUT    | Update office properties (name, status, amenities)    |
+| /office/spaces/:officeId           | DELETE | Soft-delete office (fails if has active allocations)  |
+
+# PRICING MANAGEMENT
+| Endpoint                                        | Method | Purpose                                      |
+|-------------------------------------------------|--------|----------------------------------------------|
+| /office/spaces/:officeId/pricing                | GET    | List active pricing options for an office    |
+| /office/spaces/:officeId/pricing                | POST   | Add new pricing tier (HOURLY/DAILY/etc)      |
+| /office/spaces/:officeId/pricing/:pricingId     | PUT    | Update pricing amount/discount               |
+| /office/spaces/:officeId/pricing/:pricingId     | DELETE | Deactivate pricing (fails if has bookings)   |
+
+# AVAILABILITY & CALENDAR
+| Endpoint                                  | Method | Purpose                                          |
+|-------------------------------------------|--------|--------------------------------------------------|
+| /office/spaces/:officeId/availability     | GET    | Check if office available for date range         |
+| /office/spaces/:officeId/calendar         | GET    | Get monthly calendar with bookings/allocations   |
+
+# REQUEST MANAGEMENT (Incoming requests from startups)
+| Endpoint                                | Method | Purpose                                           |
+|-----------------------------------------|--------|---------------------------------------------------|
+| /office/requests                        | GET    | List all incoming office requests (paginated)     |
+| /office/requests/:requestId             | GET    | Get request details with startup info             |
+| /office/requests/:requestId/approve     | POST   | Approve request - creates booking/allocation      |
+| /office/requests/:requestId/reject      | POST   | Reject request with reason                        |
+
+# ALLOCATION MANAGEMENT (Free/Incubation offices)
+| Endpoint                                | Method | Purpose                                           |
+|-----------------------------------------|--------|---------------------------------------------------|
+| /office/allocations                     | POST   | Direct allocate office to startup (no request)    |
+| /office/allocations                     | GET    | List all allocations (paginated)                  |
+| /office/allocations/:allocationId       | GET    | Get allocation details                            |
+| /office/allocations/:allocationId/end   | POST   | End allocation, mark office as available          |
+
+# BOOKING MANAGEMENT (Paid bookings)
+| Endpoint                               | Method | Purpose                                            |
+|----------------------------------------|--------|----------------------------------------------------|
+| /office/bookings                       | GET    | List all bookings for tenant's offices             |
+| /office/bookings/:bookingId            | GET    | Get booking details with payments                  |
+| /office/bookings/:bookingId/confirm    | POST   | Confirm booking after payment verified             |
+| /office/bookings/:bookingId/activate   | POST   | Activate confirmed booking (occupancy starts)      |
+| /office/bookings/:bookingId/complete   | POST   | Complete booking (occupancy ends)                  |
+| /office/bookings/:bookingId/cancel     | POST   | Cancel booking with reason                         |
+
+# PAYMENT MANAGEMENT
+| Endpoint                               | Method | Purpose                                            |
+|----------------------------------------|--------|----------------------------------------------------|
+| /office/payments                       | GET    | List all payments for tenant's offices             |
+| /office/payments/:paymentId            | GET    | Get payment details                                |
+| /office/payments/:paymentId/refund     | POST   | Initiate full/partial refund                       |
+| /office/payments/:paymentId/invoice    | GET    | Get invoice details for completed payment          |
+
+# DASHBOARD
+| Endpoint                | Method | Purpose                                                   |
+|-------------------------|--------|-----------------------------------------------------------|
+| /office/dashboard       | GET    | Get stats: total offices, occupancy rate, revenue, etc    |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+OfficeStatus:
+- AVAILABLE
+- OCCUPIED
+- MAINTENANCE
+- INACTIVE
+
+OfficeRequestStatus:
+- PENDING
+- APPROVED
+- REJECTED
+- CANCELLED
+
+OfficeAllocationStatus:
+- ACTIVE
+- ENDED
+- TERMINATED
+
+OfficePricingType:
+- HOURLY
+- DAILY
+- WEEKLY
+- MONTHLY
+- YEARLY
+
+OfficeVisibility:
+- PUBLIC
+- TENANT_ONLY
+- PRIVATE
+
+OfficeBookingStatus:
+- PENDING_PAYMENT
+- CONFIRMED
+- ACTIVE
+- COMPLETED
+- CANCELLED
+
+OfficePaymentStatus:
+- PENDING
+- PROCESSING
+- COMPLETED
+- FAILED
+- REFUNDED
+
+OfficePaymentType:
+- BOOKING
+- RENT
+- SECURITY_DEPOSIT
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 10
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. OFFICE SPACE MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 CREATE OFFICE SPACE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces
+Auth: Portal Token Required
+
+Purpose: Creates a new office space for the tenant with optional pricing tiers.
+
+Request Body:
+{
+  "name": "Conference Room A",
+  "location": "Building 1, Floor 2",
+  "size": 500,
+  "officeType": "CONFERENCE_ROOM",
+  "capacity": 20,
+  "status": "AVAILABLE",
+  "description": "Modern conference room with AV equipment",
+  "monthlyRate": 15000,
+  "amenities": ["WiFi", "Projector", "Whiteboard", "AC"],
+  "images": ["https://example.com/room1.jpg"],
+  "visibility": "PUBLIC",
+  "pricingOptions": [
+    {
+      "pricingType": "HOURLY",
+      "amount": 500,
+      "currency": "INR",
+      "securityDeposit": 1000,
+      "minimumDuration": 2,
+      "discountPercentage": 10
+    },
+    {
+      "pricingType": "MONTHLY",
+      "amount": 15000,
+      "currency": "INR",
+      "securityDeposit": 30000
+    }
+  ]
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Office space created",
+  "data": {
+    "id": "cuid_office_123",
+    "name": "Conference Room A",
+    "location": "Building 1, Floor 2",
+    "size": 500,
+    "officeType": "CONFERENCE_ROOM",
+    "capacity": 20,
+    "status": "AVAILABLE",
+    "visibility": "PUBLIC",
+    "ownerType": "TENANT",
+    "tenantId": "cuid_tenant_123",
+    "pricingOptions": [...]
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET ALL OFFICE SPACES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces
+Auth: Portal Token Required
+
+Purpose: Lists all office spaces belonging to the tenant with pagination and search.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10, max: 100)
+- search (string) - Search by name, location, type
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+
+Response (200):
+{
+  "success": true,
+  "message": "Office spaces fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_office_123",
+        "name": "Conference Room A",
+        "location": "Building 1, Floor 2",
+        "size": 500,
+        "capacity": 20,
+        "status": "AVAILABLE",
+        "pricingOptions": [...],
+        "allocations": [...],
+        "bookings": [...]
+      }
+    ],
+    "total": 15,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 2
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET OFFICE SPACE DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId
+Auth: Portal Token Required
+
+Purpose: Get complete details of a single office including current allocations.
+
+Response (200):
+{
+  "success": true,
+  "message": "Office space fetched",
+  "data": {
+    "id": "cuid_office_123",
+    "name": "Conference Room A",
+    "location": "Building 1, Floor 2",
+    "size": 500,
+    "capacity": 20,
+    "status": "AVAILABLE",
+    "pricingOptions": [...],
+    "allocations": [
+      {
+        "id": "cuid_alloc_1",
+        "startup": { "id": "...", "name": "Startup X", "logoUrl": "..." },
+        "allocatedBy": { "id": "...", "name": "Admin User" }
+      }
+    ],
+    "tenant": { "id": "...", "organizationName": "..." }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 UPDATE OFFICE SPACE
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId
+Auth: Portal Token Required
+
+Purpose: Update office properties like name, status, capacity, amenities.
+
+Request Body:
+{
+  "name": "Updated Conference Room A",
+  "capacity": 25,
+  "status": "MAINTENANCE",
+  "amenities": ["WiFi", "Projector", "Whiteboard", "AC", "Video Conference"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Office space updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+1.5 DELETE OFFICE SPACE
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId
+Auth: Portal Token Required
+
+Purpose: Soft-delete an office (marks as inactive). Fails if office has active allocations or bookings.
+
+Response (200):
+{
+  "success": true,
+  "message": "Office space deleted",
+  "data": { ... }
+}
+
+================================================================================
+2. PRICING MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 GET PRICING OPTIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId/pricing
+Auth: Portal Token Required
+
+Purpose: List all active pricing tiers for an office.
+
+Response (200):
+{
+  "success": true,
+  "message": "Pricing options fetched",
+  "data": [
+    {
+      "id": "cuid_pricing_1",
+      "pricingType": "HOURLY",
+      "amount": 500,
+      "currency": "INR",
+      "securityDeposit": 1000,
+      "minimumDuration": 2,
+      "discountPercentage": 10,
+      "isActive": true
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+2.2 ADD PRICING OPTION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId/pricing
+Auth: Portal Token Required
+
+Purpose: Add a new pricing tier to an office.
+
+Request Body:
+{
+  "pricingType": "WEEKLY",
+  "amount": 3000,
+  "currency": "INR",
+  "securityDeposit": 5000,
+  "minimumDuration": 1,
+  "discountPercentage": 5
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Pricing added",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+2.3 UPDATE PRICING OPTION
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId/pricing/:pricingId
+Auth: Portal Token Required
+
+Purpose: Update pricing amount, deposit, or discount.
+
+Request Body:
+{
+  "amount": 3500,
+  "discountPercentage": 8
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Pricing updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+2.4 DELETE PRICING OPTION
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId/pricing/:pricingId
+Auth: Portal Token Required
+
+Purpose: Deactivate a pricing option. Fails if pricing has active bookings.
+
+Response (200):
+{
+  "success": true,
+  "message": "Pricing deleted",
+  "data": { ... }
+}
+
+================================================================================
+3. AVAILABILITY & CALENDAR
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 CHECK AVAILABILITY
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId/availability
+Auth: Portal Token Required
+
+Purpose: Check if an office is available for a specific date range.
+
+Query Parameters:
+- startDate (string, required) - ISO date string
+- endDate (string, optional) - ISO date string
+
+Example: ?startDate=2026-02-01&endDate=2026-02-28
+
+Response (200):
+{
+  "success": true,
+  "message": "Availability fetched",
+  "data": {
+    "isAvailable": false,
+    "conflictingBookings": [
+      {
+        "id": "cuid_booking_1",
+        "startDate": "2026-02-05",
+        "endDate": "2026-02-15",
+        "status": "CONFIRMED"
+      }
+    ],
+    "allocationConflicts": [],
+    "nextAvailableDate": "2026-02-16"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 GET CALENDAR VIEW
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/spaces/:officeId/calendar
+Auth: Portal Token Required
+
+Purpose: Get monthly calendar showing all bookings and allocations for the office.
+
+Query Parameters:
+- month (number, required) - 1-12
+- year (number, required) - e.g., 2026
+
+Example: ?month=2&year=2026
+
+Response (200):
+{
+  "success": true,
+  "message": "Calendar fetched",
+  "data": {
+    "officeId": "cuid_office_123",
+    "month": 2,
+    "year": 2026,
+    "bookings": [...],
+    "allocations": [...]
+  }
+}
+
+================================================================================
+4. REQUEST MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 GET ALL REQUESTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/requests
+Auth: Portal Token Required
+
+Purpose: List all incoming office requests from startups (for approval/rejection).
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status ("PENDING" | "APPROVED" | "REJECTED" | "CANCELLED")
+- search (string) - Search by startup name
+
+Response (200):
+{
+  "success": true,
+  "message": "Requests fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_request_1",
+        "startup": {
+          "id": "cuid_startup_1",
+          "name": "Innovative Startup",
+          "logoUrl": "...",
+          "contactEmail": "..."
+        },
+        "office": { "id": "...", "name": "...", "location": "..." },
+        "status": "PENDING",
+        "desiredStartDate": "2026-02-01",
+        "desiredEndDate": "2026-06-01",
+        "pricingType": "MONTHLY",
+        "requestedAt": "2026-01-17T10:00:00Z"
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+4.2 GET REQUEST DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/requests/:requestId
+Auth: Portal Token Required
+
+Purpose: Get full request details including startup members and available offices.
+
+Response (200):
+{
+  "success": true,
+  "message": "Request details fetched",
+  "data": {
+    "id": "cuid_request_1",
+    "startup": {
+      "id": "...",
+      "name": "...",
+      "members": [
+        { "user": { "firstName": "...", "email": "..." } }
+      ]
+    },
+    "office": { "id": "...", "name": "...", "pricingOptions": [...] },
+    "booking": null
+  }
+}
+
+--------------------------------------------------------------------------------
+4.3 APPROVE REQUEST
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/requests/:requestId/approve
+Auth: Portal Token Required
+
+Purpose: Approve a request - creates a booking (and allocation if no payment required).
+
+Request Body:
+{
+  "officeId": "cuid_office_123",
+  "startDate": "2026-02-01",
+  "endDate": "2026-06-01",
+  "isPaymentRequired": true,           // defaults to TRUE now
+  "notes": "Welcome to our incubation program!"
+}
+
+IMPORTANT:
+- isPaymentRequired: true (DEFAULT) = Paid booking → startup must pay
+- isPaymentRequired: false = Free allocation (incubation) → no payment needed
+
+When isPaymentRequired is TRUE:
+  1. Booking created with status "PENDING_PAYMENT"
+  2. Startup sees booking in GET /bookings
+  3. Startup calls POST /payments/initiate → gets Razorpay order
+  4. Startup pays via Razorpay
+  5. Startup calls POST /payments/verify → booking becomes "CONFIRMED"
+
+Response (200):
+{
+  "success": true,
+  "message": "Request approved",
+  "data": {
+    "id": "cuid_booking_1",
+    "officeId": "cuid_office_123",
+    "startupId": "cuid_startup_1",
+    "status": "CONFIRMED",
+    "isPaymentRequired": false,
+    "startDate": "2026-02-01",
+    "endDate": "2026-06-01"
+  }
+}
+
+--------------------------------------------------------------------------------
+4.4 REJECT REQUEST
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/requests/:requestId/reject
+Auth: Portal Token Required
+
+Purpose: Reject a request with a reason.
+
+Request Body:
+{
+  "rejectionReason": "No suitable office space available at this time."
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Request rejected",
+  "data": { ... }
+}
+
+================================================================================
+5. ALLOCATION MANAGEMENT (Free/Incubation)
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 DIRECT ALLOCATE OFFICE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/allocations
+Auth: Portal Token Required
+
+Purpose: Directly allocate an office to a startup (without prior request).
+
+Request Body:
+{
+  "officeId": "cuid_office_123",
+  "startupId": "cuid_startup_456",
+  "startDate": "2026-02-01",
+  "endDate": "2026-06-01"
+}
+
+Note: Startup must be part of the tenant (has StartupTenantAssociation).
+
+Response (201):
+{
+  "success": true,
+  "message": "Office allocated successfully",
+  "data": {
+    "id": "cuid_allocation_1",
+    "officeId": "cuid_office_123",
+    "startupId": "cuid_startup_456",
+    "status": "ACTIVE",
+    "isActive": true,
+    "startDate": "2026-02-01",
+    "endDate": "2026-06-01",
+    "startup": { "id": "...", "name": "...", "logoUrl": "..." },
+    "office": { "id": "...", "name": "...", "location": "..." }
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 GET ALL ALLOCATIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/allocations
+Auth: Portal Token Required
+
+Purpose: List all office allocations for the tenant.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status ("ACTIVE" | "ENDED" | "TERMINATED")
+- search (string) - Search by startup name
+
+Response (200):
+{
+  "success": true,
+  "message": "Allocations fetched",
+  "data": {
+    "data": [...],
+    "total": 10,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+5.3 GET ALLOCATION DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/allocations/:allocationId
+Auth: Portal Token Required
+
+Purpose: Get full allocation details including startup members.
+
+Response (200):
+{
+  "success": true,
+  "message": "Allocation details fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+5.4 END ALLOCATION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/allocations/:allocationId/end
+Auth: Portal Token Required
+
+Purpose: End an allocation and mark office as available.
+
+Response (200):
+{
+  "success": true,
+  "message": "Allocation ended",
+  "data": {
+    "id": "...",
+    "status": "ENDED",
+    "isActive": false,
+    "endDate": "2026-01-17T..."
+  }
+}
+
+================================================================================
+6. BOOKING MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 GET ALL BOOKINGS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/bookings
+Auth: Portal Token Required
+
+Purpose: List all bookings for the tenant's offices.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- officeId (string) - Filter by specific office
+- status ("PENDING_PAYMENT" | "CONFIRMED" | "ACTIVE" | "COMPLETED" | "CANCELLED")
+- startDate (string) - Filter by start date
+- endDate (string) - Filter by end date
+
+Response (200):
+{
+  "success": true,
+  "message": "Bookings fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_booking_1",
+        "office": { "id": "...", "name": "...", "location": "..." },
+        "bookerStartup": { "id": "...", "name": "...", "logoUrl": "..." },
+        "status": "ACTIVE",
+        "startDate": "2026-02-01",
+        "endDate": "2026-06-01",
+        "totalAmount": 60000,
+        "isPaid": true,
+        "payments": [...]
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+6.2 GET BOOKING DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/bookings/:bookingId
+Auth: Portal Token Required
+
+Purpose: Get complete booking details with payments and allocation.
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking details fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+6.3 CONFIRM BOOKING
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/bookings/:bookingId/confirm
+Auth: Portal Token Required
+
+Purpose: Manually confirm a booking after payment is verified.
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking confirmed",
+  "data": { "status": "CONFIRMED" }
+}
+
+--------------------------------------------------------------------------------
+6.4 ACTIVATE BOOKING
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/bookings/:bookingId/activate
+Auth: Portal Token Required
+
+Purpose: Activate a confirmed booking (startup occupancy begins).
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking activated",
+  "data": { "status": "ACTIVE" }
+}
+
+--------------------------------------------------------------------------------
+6.5 COMPLETE BOOKING
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/bookings/:bookingId/complete
+Auth: Portal Token Required
+
+Purpose: Complete a booking (startup occupancy ends).
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking completed",
+  "data": { "status": "COMPLETED" }
+}
+
+--------------------------------------------------------------------------------
+6.6 CANCEL BOOKING
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/bookings/:bookingId/cancel
+Auth: Portal Token Required
+
+Purpose: Cancel an active or pending booking.
+
+Request Body:
+{
+  "cancellationReason": "Startup withdrew from program"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking cancelled",
+  "data": { "status": "CANCELLED" }
+}
+
+================================================================================
+7. PAYMENT MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 GET ALL PAYMENTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/payments
+Auth: Portal Token Required
+
+Purpose: List all payments received for the tenant's offices.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- bookingId (string) - Filter by booking
+- status ("PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "REFUNDED")
+
+Response (200):
+{
+  "success": true,
+  "message": "Payments fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_payment_1",
+        "amount": 60000,
+        "currency": "INR",
+        "status": "COMPLETED",
+        "paymentType": "BOOKING",
+        "paidAt": "2026-01-17T...",
+        "booking": {
+          "id": "...",
+          "startDate": "...",
+          "office": { "name": "..." },
+          "bookerStartup": { "name": "..." }
+        }
+      }
+    ],
+    "total": 10,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+7.2 GET PAYMENT DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/payments/:paymentId
+Auth: Portal Token Required
+
+Purpose: Get full payment details.
+
+Response (200):
+{
+  "success": true,
+  "message": "Payment details fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+7.3 INITIATE REFUND
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/office/payments/:paymentId/refund
+Auth: Portal Token Required
+
+Purpose: Initiate a full or partial refund via Razorpay.
+
+Request Body:
+{
+  "amount": 30000,
+  "reason": "Partial refund for early termination"
+}
+
+Note: If amount is not provided, full refund is processed.
+
+Response (200):
+{
+  "success": true,
+  "message": "Refund initiated",
+  "data": {
+    "id": "...",
+    "status": "REFUNDED",
+    "refundAmount": 30000,
+    "refundReason": "...",
+    "refundedAt": "2026-01-17T..."
+  }
+}
+
+--------------------------------------------------------------------------------
+7.4 GET INVOICE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/payments/:paymentId/invoice
+Auth: Portal Token Required
+
+Purpose: Get invoice details for a completed payment.
+
+Response (200):
+{
+  "success": true,
+  "message": "Invoice fetched",
+  "data": {
+    "invoiceNumber": "INV-OFF-1737148200000",
+    "paymentId": "...",
+    "amount": 60000,
+    "currency": "INR",
+    "paymentType": "BOOKING",
+    "paidAt": "...",
+    "booking": { ... }
+  }
+}
+
+================================================================================
+8. DASHBOARD
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 GET DASHBOARD STATS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/office/dashboard
+Auth: Portal Token Required
+
+Purpose: Get summary statistics for the tenant's office operations.
+
+Response (200):
+{
+  "success": true,
+  "message": "Dashboard stats fetched",
+  "data": {
+    "totalOffices": 15,
+    "availableOffices": 8,
+    "occupiedOffices": 5,
+    "maintenanceOffices": 2,
+    "totalAllocations": 25,
+    "activeAllocations": 10,
+    "pendingRequests": 3,
+    "activeBookings": 8,
+    "occupancyRate": 33,
+    "monthlyRevenue": 250000
+  }
+}
+
+================================================================================
+END OF PROVIDER API DOCUMENTATION
+================================================================================

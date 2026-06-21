@@ -1,0 +1,702 @@
+================================================================================
+OFFICE MODULE - API FLOW DOCUMENTATION
+================================================================================
+
+This document explains how the Office APIs work together, the sequence of API 
+calls, and which APIs to check at each stage.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. Overview - Two Portals
+2. FLOW 1: Office Setup (Incubation Portal)
+3. FLOW 2: Office Discovery (Startup Portal)
+4. FLOW 3: Request-Based Booking (Approval Required)
+5. FLOW 4: Direct Booking (No Approval)
+6. FLOW 5: Payment Flow
+7. FLOW 6: Allocation Management
+8. Status Reference Guide
+9. Complete User Journey Examples
+
+================================================================================
+1. OVERVIEW - TWO PORTALS
+================================================================================
+
+The Office module has TWO separate portals:
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         INCUBATION PORTAL (Provider)                        │
+│                   Base: /api/incubation-portal/office                       │
+├────────────────────────────────────────────────────────────────────────────┤
+│  • Creates and manages office spaces                                        │
+│  • Sets pricing options                                                     │
+│  • Receives and processes requests from startups                            │
+│  • Allocates offices (free) or creates bookings (paid)                      │
+│  • Manages payments and refunds                                             │
+│  • Views dashboard and reports                                              │
+└────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Requests/Bookings
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         STARTUP PORTAL (Receiver)                           │
+│                     Base: /api/startup-portal/office                        │
+├────────────────────────────────────────────────────────────────────────────┤
+│  • Browses available office spaces                                          │
+│  • Submits requests for offices                                             │
+│  • Creates direct bookings                                                  │
+│  • Makes payments via Razorpay                                              │
+│  • Views current offices and history                                        │
+└────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+2. FLOW 1: OFFICE SETUP (Incubation Portal)
+================================================================================
+
+This flow is performed by the incubation admin to set up office spaces.
+
+Step 1: Create Office Space
+─────────────────────────────────────────────────────────────────────────────
+POST /api/incubation-portal/office/spaces
+
+→ Creates office with basic info (name, location, capacity, amenities)
+→ Can include inline pricingOptions array to create pricing at same time
+→ Returns: Office with status "AVAILABLE"
+
+Step 2: Add Pricing Options (if not done inline)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/incubation-portal/office/spaces/:officeId/pricing
+
+→ Add HOURLY, DAILY, WEEKLY, MONTHLY, or YEARLY pricing
+→ Each pricing has: amount, currency, securityDeposit, minimumDuration
+
+Step 3: Verify Office is Ready
+─────────────────────────────────────────────────────────────────────────────
+GET /api/incubation-portal/office/spaces/:officeId
+
+→ Confirms office has pricing options
+→ Confirms status is "AVAILABLE"
+→ Confirms visibility is set (PUBLIC/TENANT_ONLY)
+
+
+FLOW DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+
+┌──────────────────┐     ┌───────────────────┐     ┌──────────────────┐
+│  Create Office   │────▶│   Add Pricing     │────▶│  Office Ready    │
+│  POST /spaces    │     │  POST /pricing    │     │  GET /spaces/:id │
+└──────────────────┘     └───────────────────┘     └──────────────────┘
+         │                        │                        │
+         ▼                        ▼                        ▼
+   Office Created          Pricing Added           Visible to Startups
+   (AVAILABLE)              (HOURLY, etc)
+
+================================================================================
+3. FLOW 2: OFFICE DISCOVERY (Startup Portal)
+================================================================================
+
+This flow is performed by startups to find available offices.
+
+Step 1: Browse Available Offices
+─────────────────────────────────────────────────────────────────────────────
+GET /api/startup-portal/office/browse
+
+→ Lists all PUBLIC offices + TENANT_ONLY offices from your incubator
+→ Use filters: search, location, capacity, pricingType, price range
+
+Step 2: View Office Details
+─────────────────────────────────────────────────────────────────────────────
+GET /api/startup-portal/office/browse/:officeId
+
+→ Full details: amenities, images, description
+→ Includes all active pricing options
+
+Step 3: Check Pricing Options
+─────────────────────────────────────────────────────────────────────────────
+GET /api/startup-portal/office/browse/:officeId/pricing
+
+→ Compare HOURLY vs MONTHLY pricing
+→ See security deposits for each option
+
+Step 4: Check Availability for Desired Dates
+─────────────────────────────────────────────────────────────────────────────
+GET /api/startup-portal/office/browse/:officeId/availability?startDate=...&endDate=...
+
+→ Returns: isAvailable (true/false)
+→ If unavailable: shows conflictingBookings and nextAvailableDate
+
+Step 5: View Calendar (Optional)
+─────────────────────────────────────────────────────────────────────────────
+GET /api/startup-portal/office/browse/:officeId/calendar?month=2&year=2026
+
+→ Shows all bookings/allocations for the month
+→ Helps plan around busy periods
+
+
+FLOW DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Browse     │───▶│   Details    │───▶│   Pricing    │───▶│ Availability │
+│  GET /browse │    │ GET /:id     │    │ GET /pricing │    │ GET /avail   │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+       │                   │                   │                   │
+       ▼                   ▼                   ▼                   ▼
+  See all offices    View amenities,     Compare pricing    Check if dates
+  with filters       images, tenant      options            are available
+                                                                   │
+                                                                   ▼
+                                                    ┌─────────────────────┐
+                                                    │  Ready to Book or   │
+                                                    │    Request Office   │
+                                                    └─────────────────────┘
+
+================================================================================
+
+4. FLOW 3: REQUEST-BASED BOOKING (Approval Required)
+================================================================================
+
+Use this flow when startup wants to REQUEST an office and wait for incubation 
+center to approve. Good for offices that require vetting.
+
+STARTUP SIDE:
+─────────────────────────────────────────────────────────────────────────────
+
+Step 1: Create Request
+POST /api/startup-portal/office/requests
+
+Body:
+{
+  "officeId": "...",
+  "startupId": "...",        ← Optional, pass explicitly if needed
+  "desiredStartDate": "2026-02-01",
+  "desiredEndDate": "2026-06-01",
+  "pricingType": "MONTHLY",
+  "purpose": "Team expansion",
+  "notes": "We need quiet space"
+}
+
+Note: startupId priority: body > query > token > DB lookup
+
+→ Creates request with status "PENDING"
+→ Request sent to incubation center
+
+Step 2: Check Request Status (Poll)
+GET /api/startup-portal/office/requests?startupId=xxx
+
+→ Wait for status to change from "PENDING"
+   • APPROVED → Booking created automatically (check GET /bookings)
+   • REJECTED → Check rejectionReason
+
+
+INCUBATION SIDE:
+─────────────────────────────────────────────────────────────────────────────
+
+Step 1: View Incoming Requests
+GET /api/incubation-portal/office/requests?status=PENDING
+
+→ Lists all pending requests with startup info
+
+Step 2: Review Request Details
+GET /api/incubation-portal/office/requests/:requestId
+
+→ See startup members, contact info
+→ See desired dates and pricing type
+
+Step 3A: Approve Request (Free Allocation)
+POST /api/incubation-portal/office/requests/:requestId/approve
+
+Body:
+{
+  "officeId": "...",
+  "startDate": "2026-02-01",
+  "endDate": "2026-06-01",
+  "isPaymentRequired": false,    ← MUST set to false for FREE
+  "notes": "Welcome!"
+}
+
+→ Creates CONFIRMED booking (no payment needed)
+→ Creates OfficeAllocation record
+→ Office status becomes "OCCUPIED"
+
+Step 3B: Approve Request (Paid Booking) - DEFAULT
+POST /api/incubation-portal/office/requests/:requestId/approve
+
+Body:
+{
+  "officeId": "...",
+  "startDate": "2026-02-01",
+  "endDate": "2026-06-01"
+  // isPaymentRequired defaults to TRUE - no need to send
+}
+
+→ Creates PENDING_PAYMENT booking
+→ Startup must pay → see FLOW 5
+
+*** IMPORTANT: isPaymentRequired now DEFAULTS to TRUE ***
+*** To give FREE allocation, you MUST send isPaymentRequired: false ***
+
+Step 3C: Reject Request
+POST /api/incubation-portal/office/requests/:requestId/reject
+
+Body: { "rejectionReason": "No space available" }
+
+→ Request status becomes "REJECTED"
+
+
+FLOW DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+
+STARTUP                                    INCUBATION
+───────                                    ──────────
+
+┌─────────────────┐
+│  Create Request │
+│ POST /requests  │
+└────────┬────────┘
+         │
+         │  Request Status: PENDING
+         ▼
+┌─────────────────┐                 ┌─────────────────┐
+│  Poll Status    │◀───────────────▶│  View Requests  │
+│ GET /requests   │                 │ GET /requests   │
+└────────┬────────┘                 └────────┬────────┘
+         │                                   │
+         │                                   ▼
+         │                          ┌─────────────────┐
+         │                          │ Review Details  │
+         │                          │ GET /:requestId │
+         │                          └────────┬────────┘
+         │                                   │
+         │                          ┌────────┴────────┐
+         │                          ▼                 ▼
+         │                   ┌────────────┐    ┌────────────┐
+         │                   │  Approve   │    │   Reject   │
+         │                   │  POST /    │    │  POST /    │
+         │                   │  approve   │    │  reject    │
+         │                   └─────┬──────┘    └─────┬──────┘
+         │                         │                 │
+         ▼                         ▼                 ▼
+┌─────────────────┐         ┌────────────┐    ┌────────────┐
+│ Status Changes: │         │  Booking   │    │  Request   │
+│ APPROVED or     │         │  Created   │    │  REJECTED  │
+│ REJECTED        │         └────────────┘    └────────────┘
+└─────────────────┘
+
+================================================================================
+5. FLOW 4: DIRECT BOOKING (No Approval)
+================================================================================
+
+Use this flow when startup can book directly without waiting for approval.
+Creates PENDING_PAYMENT booking that requires payment.
+
+STARTUP SIDE ONLY:
+─────────────────────────────────────────────────────────────────────────────
+
+Step 1: Create Direct Booking
+POST /api/startup-portal/office/bookings/direct
+
+Body:
+{
+  "officeId": "...",
+  "pricingId": "...",          ← Choose pricing option from office
+  "startupId": "...",          ← Optional, pass explicitly if needed
+  "startDate": "2026-02-01",
+  "endDate": "2026-02-28",
+  "notes": "Monthly rental"
+}
+
+Note: startupId priority: body > query > token > DB lookup
+
+→ Creates booking with status "PENDING_PAYMENT"
+→ Returns: totalAmount, securityDeposit
+
+Step 2: View Booking Details
+GET /api/startup-portal/office/bookings/:bookingId
+
+→ Confirm amounts
+→ Check isPaymentRequired (should be true)
+
+Step 3: Proceed to Payment
+→ Go to FLOW 5: Payment Flow
+
+
+FLOW DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+
+┌────────────────────┐     ┌────────────────────┐     ┌────────────────────┐
+│  Create Direct     │────▶│  View Booking      │────▶│  Initiate Payment  │
+│  POST /bookings/   │     │  GET /bookings/:id │     │  POST /payments/   │
+│  direct            │     │                    │     │  initiate          │
+└────────────────────┘     └────────────────────┘     └────────────────────┘
+         │                          │                          │
+         ▼                          ▼                          ▼
+   Booking Created           Confirm amounts            Go to Payment Flow
+   (PENDING_PAYMENT)          & dates
+
+================================================================================
+6. FLOW 5: PAYMENT FLOW
+================================================================================
+
+This flow is used whenever a booking requires payment.
+
+STARTUP SIDE:
+─────────────────────────────────────────────────────────────────────────────
+
+Step 1: Initiate Payment
+POST /api/startup-portal/office/payments/initiate
+
+Body:
+{
+  "bookingId": "...",
+  "paymentType": "BOOKING"
+}
+
+→ Creates Razorpay order
+→ Returns: razorpayOrderId, amount (in paise), key
+
+Step 2: Open Razorpay Checkout (Frontend)
+Use returned data to open Razorpay checkout:
+
+const options = {
+  key: response.key,
+  amount: response.amount,
+  currency: "INR",
+  order_id: response.razorpayOrderId,
+  handler: function(result) {
+    // Step 3: Call verify endpoint
+  }
+}
+const rzp = new Razorpay(options);
+rzp.open();
+
+Step 3: Verify Payment (After Razorpay Success)
+POST /api/startup-portal/office/payments/verify
+
+Body:
+{
+  "paymentId": "...",            ← From initiate response
+  "razorpayPaymentId": "pay_xxx", ← From Razorpay callback
+  "razorpaySignature": "xxx"     ← From Razorpay callback
+}
+
+→ Verifies payment signature
+→ Updates booking status to "CONFIRMED"
+→ Returns: invoiceNumber
+
+Step 4: Check Booking Status
+GET /api/startup-portal/office/bookings/:bookingId
+
+→ Status should be "CONFIRMED"
+→ isPaid should be true
+
+
+INCUBATION SIDE (Monitor):
+─────────────────────────────────────────────────────────────────────────────
+
+View Payments
+GET /api/incubation-portal/office/payments
+
+→ See all payments with status
+→ COMPLETED payments show booking is paid
+
+
+FLOW DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+
+┌───────────────┐     ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
+│   Initiate    │────▶│   Razorpay    │────▶│    Verify     │────▶│    Check      │
+│   Payment     │     │   Checkout    │     │   Payment     │     │   Booking     │
+│POST /initiate │     │  (Frontend)   │     │ POST /verify  │     │GET /bookings  │
+└───────────────┘     └───────────────┘     └───────────────┘     └───────────────┘
+        │                     │                     │                     │
+        ▼                     ▼                     ▼                     ▼
+  Get razorpayOrderId   User pays via      Payment verified        Booking now
+  & amount              Razorpay UI        & invoice created       CONFIRMED
+
+PAYMENT STATUS TRANSITIONS:
+─────────────────────────────────────────────────────────────────────────────
+
+  PENDING ──▶ PROCESSING ──▶ COMPLETED
+                   │
+                   └──▶ FAILED (if payment fails)
+
+BOOKING STATUS AFTER PAYMENT:
+─────────────────────────────────────────────────────────────────────────────
+
+  PENDING_PAYMENT ──▶ CONFIRMED (after successful payment)
+
+================================================================================
+7. FLOW 6: ALLOCATION MANAGEMENT
+================================================================================
+
+Allocations are FREE office assignments (no payment). Only incubation can create.
+
+INCUBATION SIDE:
+─────────────────────────────────────────────────────────────────────────────
+
+Option A: Allocate via Request Approval (isPaymentRequired: false)
+See FLOW 3, Step 3A
+
+Option B: Direct Allocation (No Request)
+POST /api/incubation-portal/office/allocations
+
+Body:
+{
+  "officeId": "...",
+  "startupId": "...",
+  "startDate": "2026-02-01",
+  "endDate": "2026-06-01"
+}
+
+→ Creates allocation with status "ACTIVE"
+→ Office becomes "OCCUPIED"
+
+View Allocations:
+GET /api/incubation-portal/office/allocations
+
+→ All allocations with startup info
+
+End Allocation:
+POST /api/incubation-portal/office/allocations/:allocationId/end
+
+→ Allocation status becomes "ENDED"
+→ Office becomes "AVAILABLE" (if no other active allocations)
+
+
+STARTUP SIDE (View Only):
+─────────────────────────────────────────────────────────────────────────────
+
+View Current Allocations:
+GET /api/startup-portal/office/my/current
+
+→ Shows allocations[] array with active offices
+
+View History:
+GET /api/startup-portal/office/my/history
+
+→ Shows all past and current allocations
+
+
+FLOW DIAGRAM:
+─────────────────────────────────────────────────────────────────────────────
+
+INCUBATION                                 STARTUP
+──────────                                 ───────
+
+┌──────────────────┐                ┌──────────────────┐
+│ Direct Allocate  │                │ View My Current  │
+│ POST /allocations│                │ GET /my/current  │
+└────────┬─────────┘                └────────┬─────────┘
+         │                                   │
+         ▼                                   ▼
+┌──────────────────┐                ┌──────────────────┐
+│ Allocation       │───────────────▶│ See allocation   │
+│ Created (ACTIVE) │                │ in allocations[] │
+└────────┬─────────┘                └──────────────────┘
+         │
+         │  (When startup leaves)
+         ▼
+┌──────────────────┐                ┌──────────────────┐
+│ End Allocation   │                │ See in history   │
+│ POST /:id/end    │───────────────▶│ GET /my/history  │
+└──────────────────┘                └──────────────────┘
+
+================================================================================
+8. STATUS REFERENCE GUIDE
+================================================================================
+
+OFFICE STATUS:
+─────────────────────────────────────────────────────────────────────────────
+  AVAILABLE    → Ready for booking/allocation
+  OCCUPIED     → Has active booking or allocation
+  MAINTENANCE  → Temporarily unavailable
+  INACTIVE     → Deleted (soft delete)
+
+REQUEST STATUS:
+─────────────────────────────────────────────────────────────────────────────
+  PENDING      → Waiting for incubation to review
+  APPROVED     → Approved, booking created
+  REJECTED     → Rejected with reason
+  CANCELLED    → Cancelled by startup
+
+BOOKING STATUS:
+─────────────────────────────────────────────────────────────────────────────
+  PENDING_PAYMENT → Created, waiting for payment
+  CONFIRMED       → Paid, waiting to start
+  ACTIVE          → Currently active (startup using office)
+  COMPLETED       → Finished successfully
+  CANCELLED       → Cancelled before completion
+
+BOOKING STATUS TRANSITIONS:
+─────────────────────────────────────────────────────────────────────────────
+
+                   ┌─────────────────┐
+                   │ PENDING_PAYMENT │
+                   └────────┬────────┘
+                            │
+         ┌──────────────────┼──────────────────┐
+         │ Payment OK       │                  │ Cancelled
+         ▼                  │                  ▼
+  ┌─────────────────┐       │          ┌─────────────────┐
+  │    CONFIRMED    │       │          │    CANCELLED    │
+  └────────┬────────┘       │          └─────────────────┘
+           │                │
+           │ Start date     │
+           ▼                │
+  ┌─────────────────┐       │
+  │     ACTIVE      │───────┘
+  └────────┬────────┘
+           │
+     ┌─────┴─────┐
+     ▼           ▼
+┌──────────┐  ┌─────────────────┐
+│COMPLETED │  │    CANCELLED    │
+└──────────┘  └─────────────────┘
+
+ALLOCATION STATUS:
+─────────────────────────────────────────────────────────────────────────────
+  ACTIVE      → Currently active
+  ENDED       → Ended normally
+  TERMINATED  → Ended early (eviction)
+
+PAYMENT STATUS:
+─────────────────────────────────────────────────────────────────────────────
+  PENDING     → Payment initiated, waiting
+  PROCESSING  → Being processed
+  COMPLETED   → Successfully paid
+  FAILED      → Payment failed
+  REFUNDED    → Refund processed
+
+================================================================================
+9. COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Startup requests office → Incubation gives FREE allocation
+─────────────────────────────────────────────────────────────────────────────
+
+STARTUP:
+1. GET /api/startup-portal/office/browse                    → Find offices
+2. GET /api/startup-portal/office/browse/:id                → View details
+3. GET /api/startup-portal/office/browse/:id/availability   → Check dates
+4. POST /api/startup-portal/office/requests                 → Submit request
+   → Body: { officeId, startupId, desiredStartDate, desiredEndDate, pricingType }
+5. GET /api/startup-portal/office/requests?startupId=xxx   → Poll for status
+
+INCUBATION:
+6. GET /api/incubation-portal/office/requests?status=PENDING → View request
+7. GET /api/incubation-portal/office/requests/:id           → Review details
+8. POST /api/incubation-portal/office/requests/:id/approve  → Approve (FREE)
+   → Body: { officeId, startDate, endDate, isPaymentRequired: false }
+   *** MUST set isPaymentRequired: false for FREE allocation ***
+
+STARTUP:
+9. GET /api/startup-portal/office/my/current                → See allocation
+
+
+EXAMPLE 2: Startup requests office → Incubation approves with PAID booking
+─────────────────────────────────────────────────────────────────────────────
+
+STARTUP:
+1. GET /api/startup-portal/office/browse                    → Find offices
+2. POST /api/startup-portal/office/requests                 → Submit request
+   → Body: { officeId, startupId, desiredStartDate, desiredEndDate, pricingType }
+
+INCUBATION:
+3. GET /api/incubation-portal/office/requests?status=PENDING → View request
+4. POST /api/incubation-portal/office/requests/:id/approve  → Approve (PAID)
+   → Body: { officeId, startDate, endDate }                 
+   *** isPaymentRequired defaults to TRUE - booking requires payment ***
+
+STARTUP (Payment Flow):
+5. GET /api/startup-portal/office/bookings?startupId=xxx   → Find PENDING_PAYMENT booking
+6. POST /api/startup-portal/office/payments/initiate        → Get Razorpay order
+   → Body: { bookingId, paymentType: "BOOKING" }
+7. (Razorpay UI - user pays)
+8. POST /api/startup-portal/office/payments/verify          → Confirm payment
+   → Body: { paymentId, razorpayPaymentId, razorpaySignature }
+9. GET /api/startup-portal/office/bookings/:id              → See CONFIRMED booking
+
+
+EXAMPLE 3: Startup books office directly (no approval needed)
+─────────────────────────────────────────────────────────────────────────────
+
+STARTUP:
+1. GET /api/startup-portal/office/browse                    → Find offices
+2. GET /api/startup-portal/office/browse/:id/pricing        → Get pricingId
+3. GET /api/startup-portal/office/browse/:id/availability   → Check dates
+4. POST /api/startup-portal/office/bookings/direct          → Book
+   → Body: { officeId, pricingId, startupId, startDate, endDate }
+5. POST /api/startup-portal/office/payments/initiate        → Start payment
+6. (Razorpay UI - user pays)
+7. POST /api/startup-portal/office/payments/verify          → Confirm payment
+8. GET /api/startup-portal/office/bookings/:id              → See CONFIRMED booking
+
+INCUBATION (to monitor):
+9. GET /api/incubation-portal/office/bookings               → See booking
+10. GET /api/incubation-portal/office/payments              → See payment
+
+
+EXAMPLE 4: Incubation directly allocates office to startup
+─────────────────────────────────────────────────────────────────────────────
+
+INCUBATION:
+1. GET /api/incubation-portal/office/spaces                 → List offices
+2. GET /api/incubation-portal/office/spaces/:id/availability → Check dates
+3. POST /api/incubation-portal/office/allocations           → Allocate
+   → Body: { officeId, startupId, startDate, endDate }
+
+STARTUP:
+4. GET /api/startup-portal/office/my/current                → See allocation
+
+
+EXAMPLE 5: Booking lifecycle (confirm → activate → complete)
+─────────────────────────────────────────────────────────────────────────────
+
+After payment, booking is CONFIRMED. Then:
+
+INCUBATION (when startup occupancy starts):
+1. POST /api/incubation-portal/office/bookings/:id/activate → ACTIVE
+
+INCUBATION (when startup leaves):
+2. POST /api/incubation-portal/office/bookings/:id/complete → COMPLETED
+
+
+EXAMPLE 6: Refund a payment
+─────────────────────────────────────────────────────────────────────────────
+
+INCUBATION:
+1. GET /api/incubation-portal/office/payments               → Find payment
+2. POST /api/incubation-portal/office/payments/:id/refund   → Refund
+   → Body: { amount: 30000, reason: "Early termination" }
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                    API TO USE
+─────────────────────────────────────────────────────────────────────────────
+"What offices are available?"               GET /startup/office/browse
+"Is office free on my dates?"               GET /startup/office/browse/:id/availability
+"What pricing options exist?"               GET /startup/office/browse/:id/pricing
+"Submit request for office"                 POST /startup/office/requests
+"Check my request status"                   GET /startup/office/requests
+"Book office directly"                      POST /startup/office/bookings/direct
+"Pay for my booking"                        POST /startup/office/payments/initiate
+"What offices do I have now?"               GET /startup/office/my/current
+"See my bookings"                           GET /startup/office/bookings
+
+"See pending requests from startups"        GET /incubation/office/requests?status=PENDING
+"Approve a request (free)"                  POST /incubation/office/requests/:id/approve
+"Reject a request"                          POST /incubation/office/requests/:id/reject
+"Allocate office directly"                  POST /incubation/office/allocations
+"End an allocation"                         POST /incubation/office/allocations/:id/end
+"See all bookings"                          GET /incubation/office/bookings
+"Activate a booking"                        POST /incubation/office/bookings/:id/activate
+"Complete a booking"                        POST /incubation/office/bookings/:id/complete
+"See all payments"                          GET /incubation/office/payments
+"Issue refund"                              POST /incubation/office/payments/:id/refund
+
+================================================================================
+END OF FLOW DOCUMENTATION
+================================================================================

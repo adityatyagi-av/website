@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Join Request Approved</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;">
+          <tr>
+            <td style="background-color:#16a34a;padding:30px;text-align:center;">
+              <h1 style="color:#ffffff;margin:0;font-size:24px;">Welcome to the Community!</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px;">
+              <p style="color:#333;font-size:16px;line-height:1.6;">Hi <%= userName %>,</p>
+              <p style="color:#333;font-size:16px;line-height:1.6;">Your request to join <strong><%= communityName %></strong> has been approved.</p>
+              <table width="100%" style="background-color:#f0fdf4;border-radius:6px;padding:20px;margin:20px 0;">
+                <tr>
+                  <td>
+                    <h2 style="color:#16a34a;margin:0 0 10px;"><%= communityName %></h2>
+                    <p style="color:#666;margin:5px 0;"><strong>Members:</strong> <%= memberCount %></p>
+                    <p style="color:#555;margin:10px 0;">You can now participate in discussions, create posts, and connect with other members.</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="color:#666;font-size:14px;">Log in to start engaging with your new community.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#f8f9fa;padding:20px;text-align:center;">
+              <p style="color:#999;font-size:12px;margin:0;">This is an automated message. Please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

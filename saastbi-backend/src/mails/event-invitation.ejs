@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Event Invitation</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;">
+          <tr>
+            <td style="background-color:#27ae60;padding:30px;text-align:center;">
+              <h1 style="color:#ffffff;margin:0;font-size:24px;">You're Invited!</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px;">
+              <p style="color:#333;font-size:16px;line-height:1.6;">Hi <%= userName %>,</p>
+              <p style="color:#333;font-size:16px;line-height:1.6;"><strong><%= inviterName %></strong> has invited you to attend:</p>
+              <table width="100%" style="background-color:#f0faf4;border-radius:6px;padding:20px;margin:20px 0;">
+                <tr>
+                  <td>
+                    <h2 style="color:#27ae60;margin:0 0 10px;"><%= eventTitle %></h2>
+                    <p style="color:#666;margin:5px 0;"><strong>Date:</strong> <%= eventDate %></p>
+                    <p style="color:#666;margin:5px 0;"><strong>Format:</strong> <%= eventFormat %></p>
+                    <% if (message) { %>
+                    <p style="color:#555;margin:15px 0 5px;font-style:italic;">"<%= message %>"</p>
+                    <% } %>
+                  </td>
+                </tr>
+              </table>
+              <p style="color:#666;font-size:14px;">Log in to your account to accept or decline this invitation.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#f8f9fa;padding:20px;text-align:center;">
+              <p style="color:#999;font-size:12px;margin:0;">This is an automated message. Please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

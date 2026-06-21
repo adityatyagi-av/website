@@ -1,0 +1,454 @@
+================================================================================
+FRONTEND ACCESS INTEGRATION GUIDE (FOR LLM)
+================================================================================
+
+Version: 2.0.0
+Last Updated: 2026-04-26
+Backend Base URL: /api/incubation-portal
+
+This document explains EXACTLY how the frontend should integrate with the
+access control system. Follow this as the single source of truth.
+
+================================================================================
+ONE RULE: CALL /me/access ONCE, NOT ON EVERY REQUEST
+================================================================================
+
+  GET /api/incubation-portal/me/access
+
+  Call this endpoint ONCE after:
+    - Login + tenant selection (user picks which organization to enter)
+    - Store the ENTIRE response in global state (Redux / Zustand / Context)
+
+  DO NOT call it on every API request. DO NOT call it on every page navigation.
+  The response is your local permission cache — use it until it changes.
+
+  Re-fetch ONLY on these events:
+    - After the user switches tenants
+    - After a subscription purchase / cancellation / plan change
+    - After an admin updates roles or permissions (listen socket "access:invalidated")
+    - On app focus after being in background > 5 minutes (optional)
+    - After receiving a 402 or 403 response from any API call (force refresh)
+
+================================================================================
+REQUEST
+================================================================================
+
+  Method: GET
+  Path:   /api/incubation-portal/me/access
+
+  Required Headers:
+    tenantkey:     {tenantKey}            (the organization slug, e.g. "acme")
+    Authorization: Bearer {accessToken}   (JWT from login)
+
+  No body. No query params.
+
+================================================================================
+RESPONSE SHAPE (200 OK)
+================================================================================
+
+  {
+    "status": 200,
+    "success": true,
+    "message": "Access resolved",
+    "data": {
+
+      "tenant": {
+        "id": "clu...",
+        "organizationName": "Acme Incubator",
+        "status": "ACTIVE"
+      },
+
+      "subscription": {
+        "hasActive": true,
+        "subscriptionId": "clu...",
+        "plan": {
+          "id": "clu...",
+          "name": "Growth Monthly",
+          "type": "MONTHLY"
+        }
+      },
+
+      "modules": [
+        "TENANT_SETTINGS", "USER_MANAGEMENT", "ROLE_MANAGEMENT",
+        "PROGRAM_CREATION", "PROGRAM_MANAGEMENT", "STARTUP_MANAGEMENT",
+        "OFFICE_SPACE", "FACILITY", "ANNOUNCEMENT", "TASK", "MENTOR",
+        "PANEL", "FUNDING", "PUBLIC_REPOSITORY", "NOTIFICATION", "CHAT",
+        "BILLING", "INVOICE", "ADDON_REQUEST"
+      ],
+
+      "moduleDetails": [
+        {
+          "moduleKey": "TENANT_SETTINGS",
+          "moduleName": "Tenant Settings",
+          "moduleDescription": "Tenant profile, branding and configuration.",
+          "category": "Administration",
+          "isCore": false,
+          "isSubscribed": true,
+          "hasAccess": true,
+          "userActions": ["R", "U"]
+        },
+        {
+          "moduleKey": "FUNDING",
+          "moduleName": "Funding",
+          "moduleDescription": "Funding sources, allocations, disbursements...",
+          "category": "Finance",
+          "isCore": false,
+          "isSubscribed": false,
+          "hasAccess": false,
+          "userActions": []
+        },
+        {
+          "moduleKey": "BILLING",
+          "moduleName": "Billing",
+          "moduleDescription": "Tenant billing access.",
+          "category": "Billing",
+          "isCore": true,
+          "isSubscribed": true,
+          "hasAccess": true,
+          "userActions": ["C", "R", "U", "D", "F"]
+        }
+      ],
+
+      "summary": {
+        "totalPlatformModules": 16,
+        "subscribedModules": 12,
+        "coreModules": 3,
+        "unsubscribedModules": 4
+      },
+
+      "permissions": {
+        "PROGRAM_CREATION":  ["R"],
+        "PROGRAM_MANAGEMENT": ["C", "R", "U"],
+        "TASK": ["C", "R", "U", "D"],
+        "ANNOUNCEMENT": ["R"],
+        "BILLING": ["R"],
+        "INVOICE": ["R"]
+      },
+
+      "isMember": true,
+      "isAdmin": false
+    }
+  }
+
+================================================================================
+FIELD-BY-FIELD EXPLANATION
+================================================================================
+
+  tenant
+    Basic tenant info. Use organizationName for display, status to show
+    banners if the org is SUSPENDED or INACTIVE.
+
+  subscription
+    hasActive:       true if the tenant has a paid active subscription.
+    subscriptionId:  the subscription row ID (for billing pages).
+    plan:            the current plan details.
+    If hasActive is false, show a "Subscribe" CTA prominently.
+
+  modules (array of strings)
+    The SUBSCRIPTION GATE result — which module KEYS the tenant is allowed
+    to use based on their plan + any super-admin overrides + core modules.
+    Use this for quick checks: modules.includes("TASK")
+
+  moduleDetails (array of objects)
+    The FULL module catalog with per-module access info. Every module on the
+    platform appears here — subscribed or not. Fields:
+
+    moduleKey           Stable identifier. Use this in all logic, never the ID.
+    moduleName          Human-readable name for UI display.
+    moduleDescription   Short description for tooltips / info cards.
+    category            Grouping label (Administration, Programs, Startups,
+                        Workspaces, Engagement, Operations, Mentorship,
+                        Finance, Content, Billing).
+    isCore              true = always available (Billing, Invoice, Add-on).
+                        Never show upgrade prompts for core modules.
+    isSubscribed        true = the tenant's plan includes this module.
+    hasAccess           true = the user can actually USE this module
+                        (isSubscribed AND user has at least one permission,
+                         OR isSubscribed AND user isAdmin).
+    userActions         Array of action codes the user can perform:
+                        C = Create, R = Read, U = Update, D = Delete, F = Full.
+                        Empty if user has no permissions on this module.
+
+  summary
+    Quick counts for dashboard / upgrade UI:
+    totalPlatformModules    Total sellable (non-core) modules on the platform.
+    subscribedModules       How many the tenant is paying for.
+    coreModules             Always-on modules (3: Billing, Invoice, Add-on).
+    unsubscribedModules     Modules available for upgrade.
+
+  permissions (object)
+    The PERMISSION GATE result — keyed by moduleKey, each value is an
+    array of action codes. Only contains modules where the user has
+    explicit role-granted permissions. A module may be in `modules` but
+    missing from `permissions` — the user can't access it yet.
+
+  isMember
+    true if the user has an active membership in this tenant.
+    false = show "You are not a member of this organization" and logout.
+
+  isAdmin
+    true = the user has ALL actions on ALL subscribed modules.
+    The permissions object may be empty for admins — assume full access
+    on every module that appears in the modules array.
+
+================================================================================
+HELPER FUNCTIONS TO BUILD
+================================================================================
+
+  Build these once, use everywhere:
+
+  // ---- store the /me/access response in global state ----
+  // state.access = response.data
+
+  function hasModule(moduleKey) {
+    return state.access.modules.includes(moduleKey);
+  }
+
+  function can(moduleKey, action) {
+    if (!hasModule(moduleKey)) return false;
+    if (state.access.isAdmin) return true;
+    return (state.access.permissions[moduleKey] || []).includes(action);
+  }
+
+  function getModuleDetail(moduleKey) {
+    return state.access.moduleDetails.find(m => m.moduleKey === moduleKey);
+  }
+
+  function isModuleSubscribed(moduleKey) {
+    const mod = getModuleDetail(moduleKey);
+    return mod?.isSubscribed ?? false;
+  }
+
+  function hasModuleAccess(moduleKey) {
+    const mod = getModuleDetail(moduleKey);
+    return mod?.hasAccess ?? false;
+  }
+
+================================================================================
+UI PATTERNS
+================================================================================
+
+  1. SIDEBAR / NAVIGATION MENU
+     -------------------------
+     For each menu item that maps to a module:
+
+       const mod = getModuleDetail("TASK");
+       if (!mod) return null;                    // unknown module, hide
+
+       if (!mod.isSubscribed) {
+         // Show as LOCKED with upgrade icon + "Upgrade to unlock"
+         return <LockedMenuItem name={mod.moduleName} />;
+       }
+       if (!mod.hasAccess) {
+         // Show as DISABLED with "Ask admin for access"
+         return <DisabledMenuItem name={mod.moduleName} />;
+       }
+       // Normal menu item
+       return <MenuItem name={mod.moduleName} />;
+
+  2. ACTION BUTTONS (Create, Edit, Delete)
+     ------------------------------------
+     Hide or disable based on specific actions:
+
+       <Button disabled={!can("TASK", "C")}>Create Task</Button>
+       <Button disabled={!can("TASK", "U")}>Edit Task</Button>
+       <Button disabled={!can("TASK", "D")}>Delete Task</Button>
+
+  3. DASHBOARD / OVERVIEW PAGE
+     -------------------------
+     Show subscription usage:
+
+       const { summary } = state.access;
+       <ProgressBar
+         label="Modules"
+         value={summary.subscribedModules}
+         max={summary.totalPlatformModules}
+       />
+       <Text>{summary.unsubscribedModules} modules available with upgrade</Text>
+
+  4. MODULE CARDS / FEATURE GRID
+     ---------------------------
+     Use moduleDetails grouped by category:
+
+       const groups = {};
+       state.access.moduleDetails.forEach(mod => {
+         if (!groups[mod.category]) groups[mod.category] = [];
+         groups[mod.category].push(mod);
+       });
+
+       Object.entries(groups).map(([category, mods]) => (
+         <Section title={category}>
+           {mods.map(mod => (
+             <ModuleCard
+               name={mod.moduleName}
+               description={mod.moduleDescription}
+               subscribed={mod.isSubscribed}
+               locked={!mod.isSubscribed}
+               actions={mod.userActions}
+             />
+           ))}
+         </Section>
+       ));
+
+  5. UPGRADE PROMPTS
+     ---------------
+     When a user clicks a locked module:
+
+       const mod = getModuleDetail("FUNDING");
+       if (!mod.isSubscribed) {
+         showUpgradeModal({
+           title: `Unlock ${mod.moduleName}`,
+           description: mod.moduleDescription,
+           cta: "View Plans",
+           link: "/billing/plans"
+         });
+       }
+
+================================================================================
+ERROR HANDLING (FROM ANY API CALL)
+================================================================================
+
+  When any API call returns an error, check the message field:
+
+  Status  Message                       Frontend Action
+  ------  ----------------------------  --------------------------------
+  402     SUBSCRIPTION_INACTIVE         Show "Subscription expired" banner
+                                        + link to /billing. Block all
+                                        non-billing pages.
+
+  403     MODULE_NOT_IN_SUBSCRIPTION    Show upgrade card for that module.
+                                        The errors[0].moduleKey tells you
+                                        which module. Redirect to /billing.
+
+  403     INSUFFICIENT_PERMISSION       Show "Ask your admin for access"
+                                        toast. The errors[0] has { moduleKey,
+                                        action } so you can be specific:
+                                        "You need Create access on Tasks".
+
+  403     ROLE_NOT_ASSIGNED             Show "Your account has not been
+                                        added to this organization" and
+                                        offer to switch tenant or logout.
+
+  400     INVALID_MODULE_KEY            Developer bug — log and report.
+
+  On ANY 402/403 response:
+    1. Show the appropriate UI message (above).
+    2. Re-fetch /me/access to refresh permissions (the backend may have
+       changed something).
+    3. Do NOT retry the failed request with the same payload.
+
+================================================================================
+MODULE KEY REFERENCE (CURRENT AS OF 2026-04-26)
+================================================================================
+
+  DO NOT HARDCODE THIS LIST. Always derive from /me/access response.
+  This is here only for developer reference.
+
+  Key                    Category          Description
+  ---------------------  ----------------  ----------------------------------
+  TENANT_SETTINGS        Administration    Tenant profile, branding, config
+  USER_MANAGEMENT        Administration    Invite and manage portal users
+  ROLE_MANAGEMENT        Administration    Create roles, assign permissions
+  PROGRAM_CREATION       Programs          Create programs, schemes, questions
+  PROGRAM_MANAGEMENT     Programs          Batches, applications, evaluations
+  PANEL                  Programs          Panel member management
+  STARTUP_MANAGEMENT     Startups          Tenant-side startup directory
+  OFFICE_SPACE           Workspaces        Office spaces, pricing, allocations
+  FACILITY               Workspaces        Facility management, bookings
+  ANNOUNCEMENT           Engagement        Announcements with targeting
+  NOTIFICATION           Engagement        In-app notification preferences
+  CHAT                   Engagement        In-tenant chat
+  TASK                   Operations        Task management with assignments
+  MENTOR                 Mentorship        Mentor associations, sessions
+  FUNDING                Finance           Funding sources, disbursements
+  PUBLIC_REPOSITORY      Content           Public repository management
+  BILLING*               Billing           Tenant billing (CORE - always on)
+  INVOICE*               Billing           Invoice viewing (CORE - always on)
+  ADDON_REQUEST*         Billing           Add-on requests (CORE - always on)
+
+  * = Core modules. Always available regardless of plan. Never show
+      upgrade prompts for these.
+
+================================================================================
+ACTION CODE REFERENCE
+================================================================================
+
+  Code  Meaning    Typical UI Elements
+  ----  ---------  --------------------------------------------------
+  C     Create     "New" / "Add" / "Create" buttons
+  R     Read       Page visibility, list views, detail views
+  U     Update     "Edit" / "Save" buttons, inline editing
+  D     Delete     "Delete" / "Remove" / "Archive" buttons
+  F     Full       Module-specific special actions (rarely used)
+
+  Convention: the backend maps HTTP methods to actions as follows:
+    GET / HEAD   -> R
+    POST         -> C
+    PUT / PATCH  -> U
+    DELETE       -> D
+
+================================================================================
+ROUTE GUARD PATTERN (NEXT.JS)
+================================================================================
+
+  For Next.js page-level protection:
+
+  // middleware or layout guard
+  function RouteGuard({ moduleKey, action = "R", children }) {
+    const { access } = useAccessStore();
+
+    if (!access) return <Loading />;
+    if (!access.isMember) return <Redirect to="/select-tenant" />;
+
+    const mod = access.moduleDetails.find(m => m.moduleKey === moduleKey);
+    if (!mod) return <NotFound />;
+
+    if (!mod.isSubscribed) {
+      return <UpgradePage
+        moduleName={mod.moduleName}
+        description={mod.moduleDescription}
+      />;
+    }
+
+    if (!access.isAdmin) {
+      const actions = access.permissions[moduleKey] || [];
+      if (!actions.includes(action)) {
+        return <NoPermission
+          moduleName={mod.moduleName}
+          requiredAction={action}
+        />;
+      }
+    }
+
+    return children;
+  }
+
+  // Usage in page:
+  <RouteGuard moduleKey="TASK" action="R">
+    <TaskListPage />
+  </RouteGuard>
+
+================================================================================
+CHECKLIST FOR FRONTEND LLM
+================================================================================
+
+  [ ] Call /me/access ONCE after login + tenant selection.
+  [ ] Store the full response in global state.
+  [ ] Build can(module, action) and hasModule(module) helpers.
+  [ ] Use moduleDetails for rendering module cards / navigation.
+  [ ] Use summary for dashboard upgrade widgets.
+  [ ] Wrap every route-guard / menu-item / action-button with helpers.
+  [ ] Handle 402/403 errors with the reason code table above.
+  [ ] Re-fetch /me/access ONLY on specific events (listed above).
+  [ ] DO NOT hardcode module lists — derive from API response.
+  [ ] DO NOT call /me/access on every API request or page navigation.
+  [ ] Show locked/upgrade UI for unsubscribed modules (isSubscribed=false).
+  [ ] Show "ask admin" UI for subscribed but inaccessible modules
+      (isSubscribed=true, hasAccess=false).
+  [ ] Admins (isAdmin=true) bypass permission checks — assume full access
+      on all subscribed modules.
+  [ ] Core modules (isCore=true) are always accessible — never lock them.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

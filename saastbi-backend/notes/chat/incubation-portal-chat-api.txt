@@ -1,0 +1,488 @@
+================================================================================
+INCUBATION PORTAL (TENANT ADMIN) — CHAT API DOCUMENTATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-22
+Base URL: /api/super-admin (support chat), /api/incubation-portal (search)
+
+Authentication: User Bearer Token (authenticate middleware)
+Note: Only tenant admins (isAdmin: true in IncubationUser) can access chat.
+      Regular incubation users will receive 403 Forbidden.
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+Tenant Admins interact with TWO chat systems:
+
+1. SUPPORT CHAT (Tenant Admin ↔ SuperAdmin)
+   - Purpose: Direct communication channel with the platform's SuperAdmin team
+   - REST API: GET /api/super-admin/my-chat and /api/super-admin/history/:tenantId
+   - Socket.IO: Default namespace for real-time messaging
+   - Uses models: Chat, TenantMessage
+   - Only isAdmin=true users can use this
+
+2. CHAT SEARCH (Find entities to chat with from incubation portal)
+   - Purpose: Search for startups, mentors, other tenants, pages from incubation
+   - REST API: GET /api/incubation-portal/chat/search
+   - Only isAdmin=true users can use this
+
+================================================================================
+DATA MODELS
+================================================================================
+
+Chat (Support Chat Container):
+  - id: string (cuid)
+  - tenantId: string (unique — one chat per tenant)
+  - lastMessage: string | null (truncated to 100 chars)
+  - lastMessageAt: DateTime | null
+  - unreadCount: number (tracks unread messages)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+TenantMessage (Support Chat Message):
+  - id: string (cuid)
+  - chatId: string (references Chat.id)
+  - senderId: string (SuperAdmin.id or IncubationUser.id)
+  - senderType: "SUPER_ADMIN" | "TENANT_ADMIN"
+  - content: string
+  - isRead: boolean (default: false)
+  - readBy: string[] (IDs of users who read this)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Search Result:
+  - id: string
+  - type: "TENANT" | "PAGE" | "STARTUP" | "USER"
+  - name: string
+  - avatar: string | null
+  - proximityScore: number (higher = closer relationship)
+  - proximityLabel: string (e.g., "Associated Mentor", "Enrolled Startup")
+  - canMessage: boolean
+  - isMentor: boolean (only for mentor results)
+  - mentorProfileId: string (only for mentor results)
+  - pageType: string (only for page results)
+
+================================================================================
+API QUICK REFERENCE
+================================================================================
+
+# SUPPORT CHAT (REST)
+| Endpoint                           | Method | Purpose                                |
+|------------------------------------|--------|----------------------------------------|
+| /api/super-admin/my-chat           | GET    | Get your tenant's support chat info    |
+| /api/super-admin/history/:tenantId | GET    | Get support chat message history       |
+
+# CHAT SEARCH
+| Endpoint                                | Method | Purpose                             |
+|-----------------------------------------|--------|-------------------------------------|
+| /api/incubation-portal/chat/search      | GET    | Search for chat-able entities       |
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message"
+}
+
+================================================================================
+1. GET MY CHAT (Support Chat)
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/my-chat
+Auth: User Token Required (must be tenant admin with isAdmin=true)
+
+Purpose: Get your tenant's support chat details. Returns the chat if it
+exists, null otherwise.
+
+Access Control: Only IncubationUser with role "Admin" can access.
+
+Response (200 — chat exists):
+{
+  "success": true,
+  "message": "Chat fetched successfully",
+  "data": {
+    "chat": {
+      "id": "cuid_chat_1",
+      "tenantId": "cuid_tenant_123",
+      "tenant": {
+        "id": "cuid_tenant_123",
+        "organizationName": "Innovation Hub",
+        "tenantKey": "innovation-hub"
+      },
+      "lastMessage": "We'll look into your billing issue",
+      "lastMessageAt": "2026-02-22T10:30:00Z",
+      "unreadCount": 2
+    }
+  }
+}
+
+Response (200 — no chat yet):
+{
+  "success": true,
+  "message": "No chat found",
+  "data": {
+    "chat": null
+  }
+}
+
+Response (403 — not admin):
+{
+  "success": false,
+  "message": "Forbidden: This endpoint is for tenant admins only"
+}
+
+Frontend Notes:
+- Call this on page load to check if a support chat exists
+- chat: null → Show "Start a conversation with Support" button
+- chat exists → Show chat preview with unreadCount badge
+- Click → load history (section 2 below)
+
+================================================================================
+2. GET CHAT HISTORY (Support Chat)
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/history/:tenantId
+Auth: User Token Required (must be tenant admin for this specific tenant)
+
+Purpose: Get paginated message history for the support chat. Tenant admins
+can only access their OWN tenant's chat history.
+
+Path Parameters:
+- tenantId (string, REQUIRED) — Your tenant's ID (from req.user.tenantId)
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 50)
+
+Example: /history/cuid_tenant_123?page=1&limit=50
+
+Response (200):
+{
+  "success": true,
+  "message": "Chat history fetched successfully",
+  "data": {
+    "chat": {
+      "id": "cuid_chat_1",
+      "tenantId": "cuid_tenant_123",
+      "tenant": {
+        "id": "cuid_tenant_123",
+        "organizationName": "Innovation Hub",
+        "tenantKey": "innovation-hub"
+      },
+      "lastMessage": "We'll look into it",
+      "lastMessageAt": "2026-02-22T10:30:00Z",
+      "unreadCount": 0
+    },
+    "messages": [
+      {
+        "id": "cuid_msg_1",
+        "chatId": "cuid_chat_1",
+        "senderId": "cuid_incuser_1",
+        "senderType": "TENANT_ADMIN",
+        "content": "Hello, we need help with billing",
+        "isRead": true,
+        "readBy": ["cuid_superadmin_1"],
+        "createdAt": "2026-02-22T10:00:00Z",
+        "sender": {
+          "id": "cuid_incuser_1",
+          "name": "John Smith",
+          "email": "john@innovationhub.com"
+        }
+      },
+      {
+        "id": "cuid_msg_2",
+        "chatId": "cuid_chat_1",
+        "senderId": "cuid_superadmin_1",
+        "senderType": "SUPER_ADMIN",
+        "content": "Sure, I can help with that",
+        "isRead": false,
+        "readBy": [],
+        "createdAt": "2026-02-22T10:15:00Z",
+        "sender": {
+          "id": "cuid_superadmin_1",
+          "name": "Admin User",
+          "email": "admin@saas.com",
+          "role": "ADMIN"
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 50,
+      "total": 2,
+      "totalPages": 1
+    }
+  }
+}
+
+Response (403):
+{
+  "success": false,
+  "message": "Forbidden: Only admins can access support chat"
+}
+
+Frontend Notes:
+- Messages are in CHRONOLOGICAL order (oldest first)
+- Right-align TENANT_ADMIN messages (your messages)
+- Left-align SUPER_ADMIN messages (support messages)
+
+================================================================================
+3. CHAT SEARCH (Incubation Portal)
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/chat/search
+Auth: User Token Required (must be tenant admin with isAdmin: true)
+
+Purpose: Search for entities to start a chat with from the incubation portal.
+Supports filtering by entity type with smart ranking:
+- Associated mentors ranked higher than unaffiliated mentors
+- Enrolled startups ranked higher than unenrolled startups
+
+Access Control: Only tenant admins (isAdmin: true, isActive: true).
+
+Query Parameters:
+- q (string, optional) — Search query (name)
+- filter (string, optional) — Entity type filter:
+    "TENANT" — Other tenants/incubations
+    "PAGE" — Public pages
+    "STARTUP" — Startups (enrolled ones ranked higher)
+    "MENTOR" — Mentors (associated ones ranked higher)
+    If omitted, returns all entity types.
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Example: ?q=john&filter=MENTOR&page=1&limit=20
+
+Response (200):
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "results": [
+      {
+        "id": "cuid_user_1",
+        "type": "USER",
+        "name": "Dr. John Smith",
+        "avatar": "https://cdn.example.com/john.jpg",
+        "proximityScore": 5,
+        "proximityLabel": "Associated Mentor",
+        "canMessage": true,
+        "isMentor": true,
+        "mentorProfileId": "cuid_mentor_1"
+      },
+      {
+        "id": "cuid_user_2",
+        "type": "USER",
+        "name": "Jane Doe",
+        "avatar": null,
+        "proximityScore": 0,
+        "proximityLabel": "Mentor",
+        "canMessage": true,
+        "isMentor": true,
+        "mentorProfileId": "cuid_mentor_2"
+      },
+      {
+        "id": "cuid_startup_1",
+        "type": "STARTUP",
+        "name": "TechCorp",
+        "avatar": "https://cdn.example.com/techcorp.png",
+        "proximityScore": 5,
+        "proximityLabel": "Enrolled Startup",
+        "canMessage": true
+      },
+      {
+        "id": "cuid_tenant_2",
+        "type": "TENANT",
+        "name": "Startup Valley Incubator",
+        "avatar": null,
+        "proximityScore": 0,
+        "proximityLabel": "Tenant",
+        "canMessage": true
+      },
+      {
+        "id": "cuid_page_1",
+        "type": "PAGE",
+        "name": "Tech Community",
+        "avatar": "https://cdn.example.com/techcomm.png",
+        "pageType": "COMMUNITY",
+        "proximityScore": 0,
+        "proximityLabel": "Page",
+        "canMessage": true
+      }
+    ],
+    "total": 12,
+    "page": 1,
+    "limit": 20
+  }
+}
+
+Response (403):
+{
+  "success": false,
+  "message": "Only tenant admins can access chat search"
+}
+
+Frontend Notes:
+- Results are pre-sorted by proximityScore (highest first)
+- proximityLabel tells the user WHY this result is ranked here
+- Use filter tabs: All | Tenants | Pages | Startups | Mentors
+- canMessage is always true for incubation search
+- When user selects a result, create conversation via universal chat service
+
+================================================================================
+SOCKET.IO — REAL-TIME SUPPORT CHAT
+================================================================================
+
+Namespace: DEFAULT namespace (same server, no path prefix)
+Transport: WebSocket with polling fallback
+
+--------------------------------------------------------------------------------
+CONNECTION & AUTHENTICATION
+--------------------------------------------------------------------------------
+
+Connect with token:
+  const socket = io("{{SERVER_URL}}", {
+    auth: { token: "Bearer <user_jwt_token>" }
+  });
+
+Connection Requirements:
+- Token must belong to an IncubationUser with isAdmin: true
+- Non-admin users will receive authentication error
+- On success, tenant admin joins room "tenant-{tenantId}" automatically
+
+On auth failure:
+  socket.on("connect_error", (err) => {
+    console.error(err.message);
+    // "Authentication error: Only tenant admins can chat"
+  });
+
+--------------------------------------------------------------------------------
+EMIT EVENTS (Frontend → Server)
+--------------------------------------------------------------------------------
+
+1. SEND MESSAGE
+   Event: "send-message"
+   Payload:
+   {
+     "content": "Hello, I need help with billing"
+   }
+
+   Notes:
+   - tenantId is NOT needed (auto-resolved from socket.user.tenantId)
+   - Chat record auto-creates if one doesn't exist for your tenant
+   - Content cannot be empty
+
+   Response Event: "message-sent"
+   Response Payload:
+   {
+     "id": "cuid_msg_new",
+     "chatId": "cuid_chat_1",
+     "senderId": "cuid_incuser_1",
+     "senderType": "TENANT_ADMIN",
+     "content": "Hello, I need help with billing",
+     "isRead": false,
+     "readBy": [],
+     "createdAt": "2026-02-22T10:00:00Z",
+     "sender": {
+       "id": "cuid_incuser_1",
+       "name": "John Smith",
+       "type": "TENANT_ADMIN"
+     },
+     "chat": {
+       "id": "cuid_chat_1",
+       "tenantId": "cuid_tenant_123",
+       "tenant": {
+         "id": "cuid_tenant_123",
+         "organizationName": "Innovation Hub",
+         "tenantKey": "innovation-hub"
+       }
+     }
+   }
+
+2. TYPING INDICATOR
+   Event: "typing"
+   Payload:
+   {
+     "isTyping": true
+   }
+
+   Notes:
+   - tenantId is auto-resolved from socket.user.tenantId
+   - Broadcasts to SuperAdmin room
+
+--------------------------------------------------------------------------------
+LISTEN EVENTS (Server → Frontend)
+--------------------------------------------------------------------------------
+
+1. NEW MESSAGE (from SuperAdmin)
+   Event: "new-message"
+   Payload: Same structure as "message-sent" but from SUPER_ADMIN
+   Notes:
+   - Only received messages from SuperAdmin for YOUR tenant
+   - senderType will be "SUPER_ADMIN"
+
+2. TYPING INDICATOR
+   Event: "user-typing"
+   Payload:
+   {
+     "userName": "Admin User",
+     "isTyping": true
+   }
+
+3. ERROR
+   Event: "error"
+   Payload: { "message": "Error description" }
+
+4. MESSAGE SENT CONFIRMATION
+   Event: "message-sent"
+   Payload: Full message object
+
+================================================================================
+COMPLETE FRONTEND FLOW
+================================================================================
+
+Flow 1: Check For Existing Support Chat
+  1. GET /api/super-admin/my-chat
+  2. chat: null → Show "Contact Support" button
+  3. chat exists → Show support chat with unreadCount badge
+
+Flow 2: Open Support Chat
+  1. GET /api/super-admin/history/:tenantId?page=1&limit=50
+  2. Render messages (right-align TENANT_ADMIN, left-align SUPER_ADMIN)
+  3. Connect to Socket.IO
+  4. Send "mark-as-read" is NOT available for tenant admins
+     (only SuperAdmin can mark messages as read)
+
+Flow 3: Send Support Message
+  1. User types message
+  2. Emit socket "send-message" { content }
+  3. Listen for "message-sent" → append to chat
+  4. SuperAdmin receives "new-message" on their end
+
+Flow 4: Search for Chat Entities
+  1. User navigates to "Chat" section in incubation portal
+  2. GET /api/incubation-portal/chat/search?q=&filter=
+  3. Display results in a searchable list with filter tabs
+  4. User selects an entity → create/get conversation
+  5. Redirect to universal chat view (see ecosystem-chat-api.txt)
+
+Flow 5: Real-time Updates
+  1. Socket connected → auto-joins "tenant-{tenantId}" room
+  2. Listen "new-message" → notification + update chat
+  3. Listen "user-typing" → show "Support is typing..."
+  4. Emit "typing" when typing

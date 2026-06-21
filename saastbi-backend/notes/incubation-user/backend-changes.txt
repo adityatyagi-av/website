@@ -1,0 +1,430 @@
+================================================================================
+  INCUBATION MULTI-TENANT USER - BACKEND CHANGES & NEW FLOW DOCUMENTATION
+================================================================================
+
+This document explains the architectural changes, new data flow, and all
+modified files for the multi-tenant IncubationUser feature.
+
+
+================================================================================
+1. PROBLEM STATEMENT
+================================================================================
+
+Previously, IncubationUser had a direct foreign key to Tenant (tenantId) and
+a unique constraint on email. This meant:
+  - One user = one tenant (organization)
+  - If a panel member was invited to a different tenant, a completely new
+    IncubationUser record was needed with a different email (not possible with
+    same email) or a workaround was needed.
+  - No way to share a single user identity across multiple organizations.
+
+
+================================================================================
+2. SOLUTION: JUNCTION TABLE PATTERN
+================================================================================
+
+A new junction table (IncubationUserTenant) was created to enable a
+many-to-many relationship between IncubationUser and Tenant.
+
+BEFORE (on IncubationUser model):
+  - tenantId        (FK to Tenant)
+  - roleId          (FK to Role)
+  - isAdmin         (Boolean)
+  - isPanelMember   (Boolean)
+  - tenant          (relation)
+  - role            (relation)
+
+AFTER (moved to IncubationUserTenant junction table):
+  IncubationUser keeps: id, name, email, password, imageUrl, isActive, userId
+  IncubationUser gains: tenantMemberships (relation to IncubationUserTenant[])
+
+  IncubationUserTenant holds:
+  - id               (cuid, PK)
+  - incubationUserId (FK to IncubationUser)
+  - tenantId         (FK to Tenant)
+  - roleId           (FK to Role, optional)
+  - isAdmin          (Boolean, default false)
+  - isPanelMember    (Boolean, default false)
+  - isActive         (Boolean, default true)
+  - createdAt, updatedAt
+  - Composite unique: [incubationUserId, tenantId]
+  - Indexes: [incubationUserId], [tenantId], [tenantId, isActive]
+
+
+================================================================================
+3. DATABASE MIGRATION REQUIRED
+================================================================================
+
+You need to run a migration on your AWS RDS database. The migration must:
+
+  A. CREATE the IncubationUserTenant table with the schema above.
+
+  B. MIGRATE existing data:
+     For every existing IncubationUser row, create a corresponding
+     IncubationUserTenant row:
+
+     INSERT INTO "IncubationUserTenant" (
+       id, "incubationUserId", "tenantId", "roleId",
+       "isAdmin", "isPanelMember", "isActive", "createdAt", "updatedAt"
+     )
+     SELECT
+       gen_random_uuid(),
+       id,
+       "tenantId",
+       "roleId",
+       "isAdmin",
+       "isPanelMember",
+       "isActive",
+       now(),
+       now()
+     FROM "IncubationUser"
+     WHERE "tenantId" IS NOT NULL;
+
+  C. DROP the old columns from IncubationUser:
+     ALTER TABLE "IncubationUser" DROP COLUMN "tenantId";
+     ALTER TABLE "IncubationUser" DROP COLUMN "roleId";
+     ALTER TABLE "IncubationUser" DROP COLUMN "isAdmin";
+     ALTER TABLE "IncubationUser" DROP COLUMN "isPanelMember";
+
+  D. UPDATE the Tenant model relation:
+     - Old: users IncubationUser[]
+     - New: userMemberships IncubationUserTenant[]
+
+  E. UPDATE the Role model relation:
+     - Old: users IncubationUser[]
+     - New: userMemberships IncubationUserTenant[]
+
+  IMPORTANT: Test the migration on a staging database first. Back up production
+  before running. The data migration (step B) must run BEFORE dropping columns
+  (step C).
+
+
+================================================================================
+4. NEW AUTHENTICATION FLOW
+================================================================================
+
+INCUBATION ADMIN LOGIN (Two-Step):
+
+  Step 1: POST /api/incubation/login
+    - Input: { email, password }
+    - No tenantKey header needed
+    - Validates credentials against IncubationUser table
+    - Queries IncubationUserTenant for all active memberships
+    - Returns: { user: { id, name, email, imageUrl, userId }, tenants: [...] }
+    - NO tokens issued at this step
+
+  Step 2: POST /api/incubation/select-tenant
+    - Input: { incubationUserId, tenantId }
+    - No auth header needed (public endpoint)
+    - Validates membership exists and is active
+    - Loads full role + permissions + tenant data
+    - Calls generateTokens() with full user payload
+    - Stores refresh token in Redis
+    - Returns: { accessToken, refreshToken, user }
+
+  The JWT token payload after select-tenant includes:
+    { id, name, email, imageUrl, userId, isAdmin, isPanelMember, roleId,
+      tenantId, role, tenant, modules }
+
+  This means downstream code that reads from req.user (set by authenticatePortal
+  middleware) still gets the same fields as before.
+
+PORTAL USER LOGIN (Single-Step, unchanged flow):
+  - POST /api/incubation-portal/user/login
+  - tenantKey header required
+  - Finds user by email, then looks up junction table for that tenant
+  - Issues tokens directly (no two-step needed because tenant is already scoped)
+
+
+================================================================================
+5. HOW TENANT CONTEXT WORKS
+================================================================================
+
+  - Frontend sends tenantKey header with every authenticated request
+  - authenticatePortal middleware was NOT modified - it still:
+    1. Validates JWT token
+    2. Resolves tenantKey from header
+    3. Sets req.user, req.tenantKey, req.tenantId
+  - The JWT token already contains tenantId from the select-tenant step
+  - This means all existing controller/service code that uses req.user.tenantId
+    or req.user.isAdmin continues to work without changes
+
+
+================================================================================
+6. FILES MODIFIED - COMPLETE LIST
+================================================================================
+
+  A. SCHEMA
+  ----------
+  File: prisma/schema.prisma
+  Changes:
+    - Removed tenantId, roleId, isAdmin, isPanelMember, role, tenant from
+      IncubationUser model
+    - Added tenantMemberships relation to IncubationUser
+    - Created IncubationUserTenant model
+    - Updated Tenant model: users -> userMemberships
+    - Updated Role model: users -> userMemberships
+
+  B. NEW UTILITY
+  ---------------
+  File: src/utils/tenantResolver.js (NEW FILE)
+  Purpose: Shared utility replacing 7 duplicated resolveTenantId() functions
+  Exports:
+    - resolveTenantId(req) -> tenantId
+      Reads tenantKey from headers or body, checks Redis cache, falls back to DB
+    - resolveUserTenantMembership(incubationUserId, tenantId) -> membership
+      Queries junction table with role + permissions include
+
+  C. AUTH SERVICE
+  ----------------
+  File: src/services/incubation/auth.service.js
+  Changes:
+    - login: Returns { user, tenants } instead of tokens
+    - selectTenant (NEW): Validates membership, builds payload, generates tokens
+    - verifyOtp: Creates IncubationUser without tenant fields, then creates
+      junction record separately
+    - getProfile: Includes tenantMemberships array
+    - createTenantPage: Looks up membership via junction table for admin check
+
+  D. AUTH CONTROLLER & ROUTE
+  ---------------------------
+  File: src/controllers/incubation/auth.controller.js
+  Changes:
+    - login: Returns { user, tenants }
+    - selectTenant (NEW): Accepts { incubationUserId, tenantId }
+
+  File: src/routes/incubation/auth.route.js
+  Changes:
+    - Added POST /select-tenant route (public, no auth middleware)
+
+  E. PORTAL USER SERVICE
+  -----------------------
+  File: src/services/incubation/portal/user.service.js
+  Changes:
+    - createUserWithRole: Checks if IncubationUser exists by email. If yes,
+      only creates junction record. If no, creates both user + junction record.
+      This enables cross-tenant user sharing.
+    - updateProfile: Splits updates - user fields to IncubationUser, roleId
+      to junction table.
+    - getUsers: Queries junction table with tenant filter, maps to flat shape.
+    - getUsersDropdown: Queries junction table, maps to flat shape.
+    - login: Finds user by email, then junction table for tenant membership.
+    - getProfile: Queries memberships, returns current + all memberships.
+    - getIncubationTeamMembers: Queries via junction table.
+
+  F. CONTROLLERS UPDATED TO USE SHARED resolveTenantId
+  -----------------------------------------------------
+  These 7 controllers had duplicated resolveTenantId() functions. They now
+  import from src/utils/tenantResolver.js:
+    - src/controllers/incubation/portal/facility.controller.js
+    - src/controllers/incubation/portal/funding.controller.js
+    - src/controllers/incubation/portal/mentor.controller.js
+    - src/controllers/incubation/portal/office-provider.controller.js
+    - src/controllers/incubation/portal/office-space.controller.js
+    - src/controllers/incubation/portal/public-repository.controller.js
+    - src/controllers/incubation/portal/task.controller.js
+
+  G. PANEL SERVICE
+  -----------------
+  File: src/services/incubation/portal/panel.service.js
+  Changes:
+    - invitePanelMember: Supports cross-tenant. If user exists in another
+      tenant, creates only a junction record for the new tenant. If user exists
+      in same tenant, updates isPanelMember flag. If new user, creates both
+      IncubationUser + junction record.
+    - getPanelMembers: Queries incubationUserTenant where isPanelMember=true
+      instead of querying incubationUser directly.
+    - assignPanelMembers: Accepts optional tenantId param. Updates junction
+      table isPanelMember flag.
+
+  H. TASK SERVICE
+  ----------------
+  File: src/services/incubation/portal/task.service.js
+  Changes:
+    - createTask: Assignee validation uses incubationUserTenant instead of
+      incubationUser with tenantId filter.
+    - assignTask: Same assignee validation change.
+    - getTeamMembers: Queries incubationUserTenant with incubationUser include,
+      maps results to maintain same response shape.
+
+  I. ANNOUNCEMENT TARGET SERVICE
+  -------------------------------
+  File: src/services/incubation/portal/announcementTarget.service.js
+  Changes:
+    - getEmailsForTarget (ROLE case): Queries incubationUserTenant by roleId
+      and tenantId instead of incubationUser.
+    - getEmailsByScope (TENANT_WIDE case): Queries incubationUserTenant by
+      tenantId instead of incubationUser.
+
+  J. PROGRAM SERVICE
+  -------------------
+  File: src/services/incubation/portal/program.service.js
+  Changes:
+    - getProgramsDropdown: Checks isAdmin via junction table lookup instead
+      of direct incubationUser.isAdmin field.
+    - getProgramById: Manager include changed from direct role relation to
+      tenantMemberships array with role and tenantId.
+
+  K. CHAT SEARCH CONTROLLER
+  ---------------------------
+  File: src/controllers/common/chat-search.controller.js
+  Changes:
+    - searchForTenant: Gets tenantKey from headers, finds tenant, finds
+      incubationUser by userId, then checks junction table for isAdmin
+      (instead of reading isAdmin directly from incubationUser).
+
+  L. CHAT SERVICE
+  ----------------
+  File: src/services/common/chat.services.js
+  Changes:
+    - searchTenantAdmins: Queries incubationUserTenant where isAdmin=true
+      instead of incubationUser where isAdmin=true. Maps response to maintain
+      same shape.
+
+  M. CHAT SOCKET
+  ---------------
+  File: src/sockets/chatSocket.js
+  Changes:
+    - Socket auth middleware: Finds incubationUser (id, name, email only),
+      gets tenantId from JWT, looks up junction table for admin check and
+      tenant data, builds user object from both sources.
+
+  N. INCUBATOR ASSOCIATION SERVICE
+  ----------------------------------
+  File: src/services/mentor/incubator-association.service.js
+  Changes:
+    - invite, approve, reject, update: All 4 methods changed from
+      db.incubationUser.findUnique({ select: { id, tenantId, isAdmin } })
+      to db.incubationUserTenant.findUnique({ where: composite key })
+      for authorization check.
+
+
+================================================================================
+7. FILES VERIFIED - NO CHANGES NEEDED
+================================================================================
+
+  These files were reviewed and confirmed to NOT need changes:
+
+  - src/utils/token.js - Not modified (per requirement)
+  - src/utils/userBridge.js - Ecosystem user creation unchanged
+  - src/middlewares/portal.auth.middleware.js - Not modified (per requirement)
+  - src/controllers/common/chat.controller.js - Uses JWT token payload
+  - src/services/incubation/portal/roles.service.js - Only queries Role model
+  - src/services/incubation/portal/startup.service.js - Only queries
+    startupTenantAssociation
+  - src/services/incubation/portal/announcement.service.js - getCreatorInfo
+    only selects id/name/email/imageUrl (still on IncubationUser)
+  - src/controllers/incubation/portal/notification.controller.js - Uses
+    incubationUser.userId only
+  - src/sockets/notificationSocket.js - Uses incubationUser.userId only
+  - All startup services - Lookups by IncubationUser.id only
+
+
+================================================================================
+8. KEY ARCHITECTURAL DECISIONS
+================================================================================
+
+  1. JWT TOKEN PAYLOAD UNCHANGED:
+     The token payload from select-tenant still contains tenantId, isAdmin,
+     roleId, role, etc. This means all code that reads req.user fields via
+     the auth middleware continues to work without changes.
+
+  2. authenticatePortal NOT MODIFIED:
+     The middleware still validates JWT, resolves tenantKey from header, and
+     sets req.user. No changes needed because the token shape is the same.
+
+  3. SHARED resolveTenantId:
+     7 controllers had duplicate implementations. Now centralized in
+     src/utils/tenantResolver.js for consistency and maintainability.
+
+  4. BACKWARD-COMPATIBLE RESPONSE SHAPES:
+     Most API responses maintain the same shape by mapping junction table
+     results to flat objects (e.g., spreading incubationUser fields with
+     membership fields like isAdmin, roleId, role).
+
+  5. CROSS-TENANT USER SHARING:
+     When creating a user (via createUserWithRole or invitePanelMember), the
+     system first checks if an IncubationUser with that email exists. If yes,
+     it only creates a junction record for the new tenant. The password from
+     the original IncubationUser record is shared across all tenants.
+
+  6. FOREIGN KEYS TO IncubationUser UNCHANGED:
+     Models like FacilityBooking, OfficeAllocation, ChangeRequest, Evaluation,
+     UserPermission, ProgramManagerAssignment, ProgramPanelAssignment still
+     have FK to IncubationUser.id. This is correct because these reference
+     the person identity, not the tenant membership.
+
+
+================================================================================
+9. QUERY PATTERN CHANGES
+================================================================================
+
+  BEFORE (direct query):
+    const user = await db.incubationUser.findFirst({
+      where: { id: userId, tenantId: tenantId }
+    });
+    // user.isAdmin, user.roleId, user.tenantId
+
+  AFTER (junction table query):
+    const membership = await db.incubationUserTenant.findUnique({
+      where: {
+        incubationUserId_tenantId: {
+          incubationUserId: userId,
+          tenantId: tenantId,
+        },
+      },
+    });
+    // membership.isAdmin, membership.roleId, membership.tenantId
+
+  For listing users in a tenant:
+
+  BEFORE:
+    const users = await db.incubationUser.findMany({
+      where: { tenantId }
+    });
+
+  AFTER:
+    const memberships = await db.incubationUserTenant.findMany({
+      where: { tenantId, isActive: true },
+      include: {
+        incubationUser: { select: { id: true, name: true, email: true } },
+        role: { select: { roleName: true } },
+      },
+    });
+    const users = memberships.map(m => ({
+      ...m.incubationUser,
+      isAdmin: m.isAdmin,
+      role: m.role,
+    }));
+
+
+================================================================================
+10. TESTING CHECKLIST
+================================================================================
+
+  After running the migration, verify:
+
+  [ ] Incubation admin signup (creates user + tenant + junction record)
+  [ ] Incubation admin login (returns tenant list)
+  [ ] Select tenant (returns tokens with correct payload)
+  [ ] Portal user login (tenant-scoped, still works)
+  [ ] Create user with role (new user in tenant)
+  [ ] Create user with role (existing user from another tenant)
+  [ ] Invite panel member (new user)
+  [ ] Invite panel member (existing user, different tenant)
+  [ ] Invite panel member (existing user, same tenant)
+  [ ] Get users list
+  [ ] Get team members
+  [ ] Get panel members
+  [ ] Assign panel members to program
+  [ ] Create/assign tasks
+  [ ] Send announcements (ROLE target, TENANT_WIDE scope)
+  [ ] Programs dropdown (admin vs non-admin)
+  [ ] Get program by ID (manager roles displayed)
+  [ ] Chat socket connection (tenant admin auth)
+  [ ] Super admin chat search (tenant admins search)
+  [ ] Tenant chat search (admin check)
+  [ ] Mentor incubator association (invite, approve, reject, update)
+  [ ] Profile endpoints (incubation auth + portal user)
+  [ ] Token refresh
+  [ ] Tenant page creation

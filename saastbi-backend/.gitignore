@@ -1,0 +1,8 @@
+.env
+/.env
+node_modules
+src/prisma/generated/
+
+/src/prisma/generated
+/prisma/generated
+/src/generated/prisma

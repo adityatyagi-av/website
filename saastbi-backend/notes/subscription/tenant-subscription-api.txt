@@ -1,0 +1,957 @@
+================================================================================
+TENANT (INCUBATION PORTAL) — SUBSCRIPTION & BILLING API DOCUMENTATION
+================================================================================
+
+Version: 1.1.0
+Last Updated: 2026-03-29
+Base URLs:
+  - /api/incubation (subscription management, plan selection, billing info)
+  - /api/incubation-portal (portal billing dashboard, manual payment)
+
+Authentication:
+  - /api/incubation routes: Bearer Token (ecosystem authenticate middleware)
+  - /api/incubation-portal routes: Bearer Token + tenantKey header (authenticatePortal middleware)
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+The Tenant subscription system handles:
+
+1. PLAN BROWSING & SELECTION
+   - View all available plans with "already purchased" indicator
+   - Each plan shows upgrade/downgrade classification relative to current plan
+
+2. SUBSCRIPTION LIFECYCLE
+   - Create subscription -> Pay via Razorpay -> Verify payment -> ACTIVE
+   - Automatic renewal via Razorpay recurring payments
+   - Cancel subscription (at cycle end or immediately)
+   - Change plan (upgrade/downgrade with proration)
+
+3. BILLING DASHBOARD (Portal)
+   - View current plan, next billing date, days remaining
+   - View recent payment history
+   - Make manual payments through the portal
+
+4. RENEWAL REMINDERS
+   - Email reminders sent automatically before renewal:
+     - WEEKLY plans: 2 days before
+     - MONTHLY plans: 2 days before
+     - YEARLY plans: 20 days before
+
+================================================================================
+DATA MODELS
+================================================================================
+
+Plan:
+  - id: string (cuid)
+  - name: string (e.g., "Basic", "Pro", "Enterprise")
+  - price: float (in INR)
+  - type: "MONTHLY" | "YEARLY" | "WEEKLY"
+  - maxUsers: number (default: 5)
+  - maxStartups: number (default: 1)
+  - storageLimit: number | null
+  - features: string[] (list of feature descriptions)
+  - razorpayPlanId: string | null (Razorpay plan reference)
+  - planModules: PlanModule[] (included modules)
+
+Subscription:
+  - id: string (cuid)
+  - tenantId: string
+  - planId: string
+  - razorpaySubscriptionId: string (unique)
+  - razorpayPaymentId: string | null
+  - razorpaySignature: string | null
+  - status: "PENDING" | "ACTIVE" | "COMPLETED" | "CANCELED" | "EXPIRED"
+  - startDate: DateTime | null
+  - endDate: DateTime | null (also serves as next billing date)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Invoice:
+  - id: string (cuid)
+  - tenantId: string
+  - invoiceNumber: string (unique, format: "INV-YEAR-HEXCODE")
+  - amount: float
+  - issuedDate: DateTime
+  - dueDate: DateTime | null
+  - paidDate: DateTime | null
+  - status: "UNPAID" | "PAID" | "OVERDUE"
+  - pdfUrl: string | null
+
+BillingHistory:
+  - id: string (cuid)
+  - tenantId: string
+  - amount: float
+  - description: string | null
+  - billingDate: DateTime
+  - paymentMethod: string | null ("Razorpay" or "SYSTEM_CREDIT")
+  - status: "SUCCESS" | "FAILED" | "PENDING"
+  - invoiceId: string | null
+  - createdAt: DateTime
+
+================================================================================
+API QUICK REFERENCE
+================================================================================
+
+# SUBSCRIPTION MANAGEMENT (/api/incubation)
+| Endpoint                                    | Method | Purpose                                    |
+|---------------------------------------------|--------|--------------------------------------------|
+| /plans/:tenantId                            | GET    | Get all plans with purchase status          |
+| /create-subscription                        | POST   | Create new Razorpay subscription            |
+| /verify-payment                             | POST   | Verify Razorpay payment & activate          |
+| /subscription/tenant/:tenantId              | GET    | Get current subscription details            |
+| /subscription/billing-info/:tenantId        | GET    | Get billing cycle info & next payment date  |
+| /subscription/:subscriptionId/cancel        | POST   | Cancel subscription                         |
+| /subscription/change-plan                   | POST   | Upgrade or downgrade plan                   |
+| /webhook/razorpay                           | POST   | Razorpay webhook (no auth, server-to-server)|
+
+# PORTAL BILLING (/api/incubation-portal)
+| Endpoint                    | Method | Purpose                                       |
+|-----------------------------|--------|-----------------------------------------------|
+| /billing                    | GET    | Full billing dashboard with next cycle info   |
+| /billing/create-order       | POST   | Create Razorpay order for manual payment      |
+| /billing/verify-payment     | POST   | Verify manual payment & record in billing     |
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "status": 200,
+  "data": { ... },
+  "message": "Operation successful message"
+}
+
+Error Response:
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Error message"
+}
+
+================================================================================
+1. GET AVAILABLE PLANS
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation/plans/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get all available plans with indicators showing which plan is
+currently purchased, subscription status, and whether it would be an
+upgrade or downgrade.
+
+Path Parameters:
+- tenantId (string, REQUIRED) — The tenant's ID
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "currentPlanId": "cuid_plan_2",
+    "plans": [
+      {
+        "id": "cuid_plan_1",
+        "name": "Basic",
+        "price": 499,
+        "type": "MONTHLY",
+        "maxUsers": 5,
+        "maxStartups": 1,
+        "features": ["5 Users", "1 Startup", "Basic Support"],
+        "razorpayPlanId": "plan_rzp_basic",
+        "planModules": [
+          {
+            "module": { "id": "cuid_mod_1", "name": "Core" }
+          }
+        ],
+        "isCurrent": false,
+        "isSubscribed": false,
+        "isAlreadyPurchased": false,
+        "subscriptionStatus": null,
+        "subscriptionId": null,
+        "startDate": null,
+        "endDate": null,
+        "nextBillingDate": null,
+        "changeType": "downgrade"
+      },
+      {
+        "id": "cuid_plan_2",
+        "name": "Pro",
+        "price": 999,
+        "type": "MONTHLY",
+        "maxUsers": 20,
+        "maxStartups": 5,
+        "features": ["20 Users", "5 Startups", "Priority Support"],
+        "razorpayPlanId": "plan_rzp_pro",
+        "planModules": [
+          {
+            "module": { "id": "cuid_mod_1", "name": "Core" }
+          },
+          {
+            "module": { "id": "cuid_mod_2", "name": "Analytics" }
+          }
+        ],
+        "isCurrent": true,
+        "isSubscribed": true,
+        "isAlreadyPurchased": true,
+        "subscriptionStatus": "ACTIVE",
+        "subscriptionId": "cuid_sub_1",
+        "startDate": "2026-03-01T00:00:00Z",
+        "endDate": "2026-04-01T00:00:00Z",
+        "nextBillingDate": "2026-04-01T00:00:00Z",
+        "changeType": null
+      },
+      {
+        "id": "cuid_plan_3",
+        "name": "Enterprise",
+        "price": 2999,
+        "type": "MONTHLY",
+        "maxUsers": 100,
+        "maxStartups": 25,
+        "features": ["100 Users", "25 Startups", "Dedicated Support"],
+        "razorpayPlanId": "plan_rzp_enterprise",
+        "planModules": [
+          {
+            "module": { "id": "cuid_mod_1", "name": "Core" }
+          },
+          {
+            "module": { "id": "cuid_mod_2", "name": "Analytics" }
+          },
+          {
+            "module": { "id": "cuid_mod_3", "name": "Advanced" }
+          }
+        ],
+        "isCurrent": false,
+        "isSubscribed": false,
+        "isAlreadyPurchased": false,
+        "subscriptionStatus": null,
+        "subscriptionId": null,
+        "startDate": null,
+        "endDate": null,
+        "nextBillingDate": null,
+        "changeType": "upgrade"
+      }
+    ]
+  },
+  "message": "Plans fetched successfully"
+}
+
+Frontend Notes:
+- isAlreadyPurchased: true → Show "Current Plan" badge, disable purchase button
+- changeType: "upgrade" → Show "Upgrade" button
+- changeType: "downgrade" → Show "Downgrade" button
+- changeType: "new" → Show "Subscribe" button (no current subscription)
+- changeType: null → This IS the current plan
+- currentPlanId at top level allows quick reference without iterating
+
+================================================================================
+2. CREATE SUBSCRIPTION
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation/create-subscription
+Auth: Bearer Token Required
+
+Purpose: Create a new Razorpay subscription for a plan. Returns a checkout
+URL that the frontend should open for the user to complete payment.
+
+Request Body:
+{
+  "planId": "cuid_plan_2",
+  "tenantId": "cuid_tenant_123"
+}
+
+Response (201):
+{
+  "success": true,
+  "status": 201,
+  "data": {
+    "subscription": {
+      "id": "cuid_sub_1",
+      "tenantId": "cuid_tenant_123",
+      "planId": "cuid_plan_2",
+      "razorpaySubscriptionId": "sub_rzp_abc123",
+      "status": "PENDING",
+      "plan": {
+        "id": "cuid_plan_2",
+        "name": "Pro",
+        "price": 999,
+        "type": "MONTHLY",
+        "planModules": [...]
+      },
+      "tenant": { ... }
+    },
+    "razorpaySubscriptionId": "sub_rzp_abc123",
+    "shortUrl": "https://rzp.io/i/abc123"
+  },
+  "message": "Subscription created successfully"
+}
+
+Error (400 — already subscribed):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Tenant already has an active subscription"
+}
+
+Frontend Notes:
+- After getting response, open shortUrl in a new window or use Razorpay
+  checkout.js with razorpaySubscriptionId
+- Status is PENDING until payment is verified
+- User must complete payment on Razorpay
+
+================================================================================
+3. VERIFY PAYMENT
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation/verify-payment
+Auth: Bearer Token Required
+
+Purpose: After Razorpay payment completes, verify the signature and activate
+the subscription. This also creates an invoice and billing history record.
+
+Request Body:
+{
+  "razorpay_payment_id": "pay_abc123",
+  "razorpay_subscription_id": "sub_rzp_abc123",
+  "razorpay_signature": "hex_signature_string",
+  "tenantId": "cuid_tenant_123"
+}
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "subscription": {
+      "id": "cuid_sub_1",
+      "status": "ACTIVE",
+      "startDate": "2026-03-29T00:00:00Z",
+      "endDate": "2026-04-29T00:00:00Z",
+      "plan": { ... },
+      "tenant": { ... }
+    },
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "status": "ACTIVE",
+      "planId": "cuid_plan_2"
+    },
+    "invoice": {
+      "id": "cuid_invoice_1",
+      "invoiceNumber": "INV-2026-A1B2C3D4",
+      "amount": 999,
+      "status": "PAID",
+      "paidDate": "2026-03-29T00:00:00Z"
+    },
+    "message": "Payment verified and subscription activated"
+  },
+  "message": "Payment verified and subscription activated"
+}
+
+Error (400 — invalid signature):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Invalid payment signature"
+}
+
+Frontend Notes:
+- Call this immediately after Razorpay checkout callback fires
+- On success, redirect to dashboard — tenant is now ACTIVE
+- Razorpay provides razorpay_payment_id, razorpay_subscription_id,
+  razorpay_signature in the checkout callback
+
+================================================================================
+4. GET SUBSCRIPTION BY TENANT
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation/subscription/tenant/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get the most recent subscription for a tenant with full plan details.
+If subscription is ACTIVE, also fetches live Razorpay details.
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Response (200 — active subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_sub_1",
+    "tenantId": "cuid_tenant_123",
+    "planId": "cuid_plan_2",
+    "razorpaySubscriptionId": "sub_rzp_abc123",
+    "status": "ACTIVE",
+    "startDate": "2026-03-01T00:00:00Z",
+    "endDate": "2026-04-01T00:00:00Z",
+    "plan": {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "planModules": [...]
+    },
+    "tenant": { ... },
+    "razorpayDetails": {
+      "id": "sub_rzp_abc123",
+      "status": "active",
+      "remaining_count": 11,
+      "paid_count": 1,
+      "total_count": 12,
+      "current_start": 1711929600,
+      "current_end": 1714521600
+    }
+  },
+  "message": "Subscription fetched successfully"
+}
+
+Response (200 — no subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": null,
+  "message": "Subscription fetched successfully"
+}
+
+Frontend Notes:
+- data: null means tenant has never subscribed
+- razorpayDetails only present for ACTIVE subscriptions
+- Use remaining_count to show "X renewals remaining"
+
+================================================================================
+5. GET BILLING INFO
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation/subscription/billing-info/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get the next billing cycle date, days until renewal, plan details,
+and recent payment history. This is the primary endpoint for showing
+"your next payment is on X date".
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Response (200 — active subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "organizationName": "Innovation Hub",
+      "status": "ACTIVE"
+    },
+    "subscription": {
+      "id": "cuid_sub_1",
+      "status": "ACTIVE",
+      "startDate": "2026-03-01T00:00:00Z",
+      "endDate": "2026-04-01T00:00:00Z",
+      "razorpaySubscriptionId": "sub_rzp_abc123"
+    },
+    "plan": {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "features": ["20 Users", "5 Startups"],
+      "modules": [
+        { "id": "cuid_mod_1", "name": "Core" },
+        { "id": "cuid_mod_2", "name": "Analytics" }
+      ]
+    },
+    "billing": {
+      "nextBillingDate": "2026-04-01T00:00:00Z",
+      "daysUntilNextBilling": 3,
+      "currentCycleStart": "2026-03-01T00:00:00Z",
+      "currentCycleEnd": "2026-04-01T00:00:00Z",
+      "remainingCount": 11,
+      "paidCount": 1,
+      "totalCount": 12,
+      "isPaymentDue": false,
+      "pendingAmount": null,
+      "paymentDueReason": null,
+      "isRenewalApproaching": true,
+      "renewalReminderText": "Your plan renews in 3 days"
+    },
+    "recentBillingHistory": [
+      {
+        "id": "cuid_bh_1",
+        "amount": 999,
+        "description": "Subscription payment for Pro",
+        "paymentMethod": "Razorpay",
+        "status": "SUCCESS",
+        "billingDate": "2026-03-01T00:00:00Z",
+        "invoice": {
+          "id": "cuid_inv_1",
+          "invoiceNumber": "INV-2026-A1B2C3D4",
+          "status": "PAID"
+        }
+      }
+    ]
+  },
+  "message": "Billing info fetched successfully"
+}
+
+Response (200 — no active subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "organizationName": "Innovation Hub",
+      "status": "INACTIVE"
+    },
+    "subscription": null,
+    "billing": null
+  },
+  "message": "Billing info fetched successfully"
+}
+
+Frontend Notes:
+- billing.nextBillingDate is the KEY field — show this prominently
+- billing.daysUntilNextBilling for countdown ("3 days until renewal")
+- billing: null means no active subscription
+- recentBillingHistory shows last 5 payments
+- remainingCount/paidCount/totalCount from Razorpay (may be null if
+  Razorpay API is unreachable)
+
+Payment Status Fields (in billing object):
+- isPaymentDue (boolean): When true, show a "Pay Now" button prominently
+- pendingAmount (number | null): The amount owed when isPaymentDue is true
+- paymentDueReason (string | null): Reason for payment being due:
+    - "Overdue invoice" — an invoice with OVERDUE status exists
+    - "Unpaid invoice" — an invoice with UNPAID status exists
+    - "Subscription halted - manual payment required" — Razorpay auto-pay failed
+    - "Subscription paused - manual payment required" — Razorpay subscription paused
+    - "Billing cycle expired" — daysUntilNextBilling reached 0
+- isRenewalApproaching (boolean): True when renewal is near but not yet due
+    - WEEKLY plans: within 2 days
+    - MONTHLY plans: within 7 days
+    - YEARLY plans: within 20 days
+- renewalReminderText (string | null): Human-readable text e.g. "Your plan renews in 3 days"
+
+Frontend Logic:
+- if isPaymentDue === true → Show alert banner + "Pay Now" button using pendingAmount
+- if isPaymentDue === false && isRenewalApproaching === true → Show soft info banner with renewalReminderText
+- if both false → No payment action needed
+
+================================================================================
+6. CANCEL SUBSCRIPTION
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation/subscription/:subscriptionId/cancel
+Auth: Bearer Token Required
+
+Purpose: Cancel the subscription. Can cancel at end of current cycle or
+immediately.
+
+Path Parameters:
+- subscriptionId (string, REQUIRED)
+
+Request Body:
+{
+  "cancelAtCycleEnd": true
+}
+
+- cancelAtCycleEnd: true → Service continues until endDate, then expires
+- cancelAtCycleEnd: false → Service stops immediately, tenant SUSPENDED
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_sub_1",
+    "status": "CANCELED",
+    "endDate": "2026-04-01T00:00:00Z",
+    "plan": { ... },
+    "tenant": { ... }
+  },
+  "message": "Subscription cancelled successfully"
+}
+
+Frontend Notes:
+- Show confirmation dialog: "Cancel at end of cycle?" vs "Cancel immediately?"
+- cancelAtCycleEnd: true — tenant keeps access until endDate
+- cancelAtCycleEnd: false — tenant loses access immediately
+- After cancellation, redirect to plans page
+
+================================================================================
+7. CHANGE PLAN (UPGRADE / DOWNGRADE)
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation/subscription/change-plan
+Auth: Bearer Token Required
+
+Purpose: Switch to a different plan. Calculates proration credit from unused
+days on current plan, cancels old subscription, creates new one.
+
+Request Body:
+{
+  "tenantId": "cuid_tenant_123",
+  "newPlanId": "cuid_plan_3"
+}
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "subscription": {
+      "id": "cuid_sub_2",
+      "status": "PENDING",
+      "planId": "cuid_plan_3",
+      "plan": {
+        "name": "Enterprise",
+        "price": 2999,
+        "type": "MONTHLY"
+      },
+      "tenant": { ... }
+    },
+    "razorpaySubscriptionId": "sub_rzp_new123",
+    "shortUrl": "https://rzp.io/i/new123",
+    "changeType": "upgrade",
+    "previousPlan": "Pro",
+    "newPlan": "Enterprise",
+    "proratedCredit": 547.91
+  },
+  "message": "Plan upgrade initiated successfully"
+}
+
+Error (400 — same plan):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Tenant is already on this plan"
+}
+
+Frontend Notes:
+- changeType: "upgrade" or "downgrade" — show appropriate messaging
+- proratedCredit: amount credited for unused days on old plan
+- shortUrl: open for user to pay for new plan
+- Old subscription is CANCELED immediately
+- Tenant stays ACTIVE during transition (not SUSPENDED)
+- New subscription is PENDING until payment completes
+
+================================================================================
+8. PORTAL BILLING DASHBOARD
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/billing
+Auth: Bearer Token + tenantKey header
+Header: tenantKey: "your-tenant-key"
+
+Purpose: Full billing dashboard for the incubation portal. Shows current plan,
+next billing date, subscription status, and recent payments.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "organizationName": "Innovation Hub",
+      "status": "ACTIVE"
+    },
+    "subscription": {
+      "id": "cuid_sub_1",
+      "status": "ACTIVE",
+      "startDate": "2026-03-01T00:00:00Z",
+      "endDate": "2026-04-01T00:00:00Z",
+      "razorpaySubscriptionId": "sub_rzp_abc123"
+    },
+    "plan": {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "features": ["20 Users", "5 Startups"],
+      "modules": [
+        { "id": "cuid_mod_1", "name": "Core" },
+        { "id": "cuid_mod_2", "name": "Analytics" }
+      ]
+    },
+    "billing": {
+      "nextBillingDate": "2026-04-01T00:00:00Z",
+      "daysUntilNextBilling": 3,
+      "currentCycleStart": "2026-03-01T00:00:00Z",
+      "currentCycleEnd": "2026-04-01T00:00:00Z",
+      "remainingCount": 11,
+      "paidCount": 1,
+      "totalCount": 12,
+      "isPaymentDue": false,
+      "pendingAmount": null,
+      "paymentDueReason": null,
+      "isRenewalApproaching": true,
+      "renewalReminderText": "Your plan renews in 3 days"
+    },
+    "recentPayments": [
+      {
+        "id": "cuid_bh_1",
+        "amount": 999,
+        "description": "Subscription payment for Pro",
+        "paymentMethod": "Razorpay",
+        "status": "SUCCESS",
+        "billingDate": "2026-03-01T00:00:00Z",
+        "invoice": {
+          "id": "cuid_inv_1",
+          "invoiceNumber": "INV-2026-A1B2C3D4",
+          "status": "PAID",
+          "paidDate": "2026-03-01T00:00:00Z"
+        }
+      }
+    ]
+  },
+  "message": "Billing dashboard fetched successfully"
+}
+
+Frontend Notes:
+- This is the main billing page for the incubation portal
+- Show plan card with name, price, type
+- Show "Next payment: April 1, 2026 (3 days)" prominently
+- Show billing.remainingCount as "11 renewals remaining"
+- Show recentPayments as a table with invoice links
+- subscription: null means no active subscription — show "Subscribe" CTA
+
+Payment Status Fields (in billing object):
+- isPaymentDue (boolean): When true, show a "Pay Now" button prominently
+- pendingAmount (number | null): The amount owed when isPaymentDue is true
+- paymentDueReason (string | null): Reason for payment being due:
+    - "Overdue invoice" — an invoice with OVERDUE status exists
+    - "Unpaid invoice" — an invoice with UNPAID status exists
+    - "Subscription halted - manual payment required" — Razorpay auto-pay failed
+    - "Subscription paused - manual payment required" — Razorpay subscription paused
+    - "Billing cycle expired" — daysUntilNextBilling reached 0
+- isRenewalApproaching (boolean): True when renewal is near but not yet due
+    - WEEKLY plans: within 2 days
+    - MONTHLY plans: within 7 days
+    - YEARLY plans: within 20 days
+- renewalReminderText (string | null): Human-readable text e.g. "Your plan renews in 3 days"
+
+Frontend Logic:
+- if isPaymentDue === true → Show alert banner + "Pay Now" button, trigger Flow 4 (manual payment)
+- if isPaymentDue === false && isRenewalApproaching === true → Show soft info banner with renewalReminderText
+- if both false → No payment action needed
+
+================================================================================
+9. CREATE MANUAL PAYMENT ORDER (Portal)
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/billing/create-order
+Auth: Bearer Token + tenantKey header
+
+Purpose: Create a Razorpay one-time payment order so the tenant can pay
+their subscription through the portal. Returns Razorpay order details
+for frontend checkout integration.
+
+Request Body: (empty — amount determined from current plan)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "orderId": "order_rzp_abc123",
+    "amount": 999,
+    "currency": "INR",
+    "planName": "Pro",
+    "razorpayKeyId": "rzp_test_abc123"
+  },
+  "message": "Payment order created successfully"
+}
+
+Error (404 — no active subscription):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "No active subscription found"
+}
+
+Frontend Notes:
+- Use razorpayKeyId and orderId to open Razorpay checkout:
+  var options = {
+    key: data.razorpayKeyId,
+    amount: data.amount * 100,
+    currency: data.currency,
+    order_id: data.orderId,
+    handler: function(response) {
+      // Call verify-payment with response details
+    }
+  };
+  var rzp = new Razorpay(options);
+  rzp.open();
+
+================================================================================
+10. VERIFY MANUAL PAYMENT (Portal)
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/billing/verify-payment
+Auth: Bearer Token + tenantKey header
+
+Purpose: Verify the manual payment after Razorpay checkout completes.
+Records the payment in billing history, creates an invoice, and
+updates the subscription cycle dates.
+
+Request Body:
+{
+  "razorpayOrderId": "order_rzp_abc123",
+  "razorpayPaymentId": "pay_def456",
+  "razorpaySignature": "hex_signature_string"
+}
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "invoice": {
+      "id": "cuid_inv_2",
+      "invoiceNumber": "INV-2026-E5F6G7H8",
+      "amount": 999,
+      "status": "PAID",
+      "paidDate": "2026-03-29T00:00:00Z"
+    },
+    "billingRecord": {
+      "id": "cuid_bh_2",
+      "amount": 999,
+      "description": "Manual payment for Pro [pay_def456]",
+      "paymentMethod": "Razorpay",
+      "status": "SUCCESS"
+    },
+    "subscription": {
+      "id": "cuid_sub_1",
+      "startDate": "2026-03-29T00:00:00Z",
+      "endDate": "2026-04-29T00:00:00Z"
+    }
+  },
+  "message": "Payment verified and recorded successfully"
+}
+
+Error (400 — invalid signature):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Invalid payment signature"
+}
+
+Frontend Notes:
+- Call this in the Razorpay checkout handler callback
+- On success, refresh the billing dashboard
+- subscription.endDate is updated to new cycle end
+- If the current billing cycle hasn't expired yet, the new cycle starts
+  from the existing endDate (not from today). For example:
+    - Current endDate: April 29 → Manual payment → New endDate: May 29
+    - Current endDate already passed → Manual payment → New endDate: today + plan duration
+
+================================================================================
+COMPLETE FRONTEND FLOWS
+================================================================================
+
+Flow 1: View Plans & Subscribe (First Time)
+  1. GET /api/incubation/plans/:tenantId
+  2. Display plans — each has isAlreadyPurchased, changeType
+  3. User selects a plan (changeType: "new")
+  4. POST /api/incubation/create-subscription { planId, tenantId }
+  5. Open shortUrl or use Razorpay checkout with razorpaySubscriptionId
+  6. After payment: POST /api/incubation/verify-payment
+  7. On success: redirect to dashboard, tenant is ACTIVE
+
+Flow 2: Upgrade/Downgrade Plan
+  1. GET /api/incubation/plans/:tenantId
+  2. User selects a different plan (changeType: "upgrade" or "downgrade")
+  3. Show confirmation: "Upgrade to Enterprise? Credit: INR 547.91"
+  4. POST /api/incubation/subscription/change-plan { tenantId, newPlanId }
+  5. Open shortUrl for new plan payment
+  6. POST /api/incubation/verify-payment with new subscription details
+  7. On success: redirect to dashboard
+
+Flow 3: View Billing Dashboard (Portal)
+  1. GET /api/incubation-portal/billing
+  2. Display: current plan, next billing date, days remaining
+  3. Display: recent payments table
+  4. Check billing.isPaymentDue:
+     - If true → Show alert with paymentDueReason + "Pay Now" button → Flow 4
+     - If false, check billing.isRenewalApproaching:
+       - If true → Show soft banner with renewalReminderText
+  5. "Pay Now" button (always available) → Flow 4
+
+Flow 4: Manual Payment Through Portal
+  1. POST /api/incubation-portal/billing/create-order
+  2. Open Razorpay checkout with orderId and razorpayKeyId
+  3. After payment callback:
+     POST /api/incubation-portal/billing/verify-payment
+  4. On success: refresh billing dashboard
+
+Flow 5: Cancel Subscription
+  1. User clicks "Cancel Subscription"
+  2. Show options: "Cancel at end of cycle" or "Cancel immediately"
+  3. POST /api/incubation/subscription/:id/cancel { cancelAtCycleEnd }
+  4. On success: show updated status
+
+Flow 6: Check Next Billing Date
+  1. GET /api/incubation/subscription/billing-info/:tenantId
+  2. Display billing.nextBillingDate and billing.daysUntilNextBilling
+  3. Display billing.remainingCount for total cycles remaining
+
+================================================================================
+WEBHOOK EVENTS (Server-to-Server, Razorpay -> Backend)
+================================================================================
+
+Endpoint: POST /api/incubation/webhook/razorpay
+Auth: None (verified via x-razorpay-signature header)
+
+Events handled:
+- subscription.activated  -> Subscription set to ACTIVE
+- subscription.charged    -> Invoice created, billing cycle dates updated
+- subscription.completed  -> Subscription set to COMPLETED
+- subscription.cancelled  -> Subscription CANCELED (tenant suspended only if
+                             no other ACTIVE/PENDING subscription exists)
+- subscription.paused     -> Tenant SUSPENDED
+- subscription.halted     -> Tenant SUSPENDED
+
+Note: subscription.charged also handles idempotency — duplicate webhook
+events for the same payment ID are ignored.
+
+================================================================================
+EMAIL REMINDERS (Automatic)
+================================================================================
+
+Cron Schedule: Daily at 9:00 AM
+
+Reminder Windows:
+- WEEKLY plans:  2 days before renewal
+- MONTHLY plans: 2 days before renewal
+- YEARLY plans:  20 days before renewal
+
+Email sent to: All admin users (isAdmin: true) of the tenant
+Template: src/mails/subscription-renewal-reminder.ejs
+
+Email Content:
+- Organization name
+- Plan name and type
+- Amount (INR)
+- Renewal date
+- Days remaining

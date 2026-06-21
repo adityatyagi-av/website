@@ -1,0 +1,285 @@
+================================================================================
+PAYOUT ACCOUNT (KYC) API — INCUBATION (TENANT) PORTAL
+================================================================================
+
+Base URL prefix:  /api/incubation-portal
+Auth middleware:  authenticatePortal
+
+Required headers on every request:
+  Authorization: Bearer <accessToken>
+  tenantkey:     <tenantKey>
+
+Common envelope:
+{ "success": <bool>, "status": <httpStatus>, "data": <object|array|null>, "message": <string|null> }
+
+Why this matters:
+  A tenant CANNOT publish paid office pricing or accept paid bookings until
+  their IncubationPayoutAccount is kycStatus = "ACTIVATED" AND isActive = true.
+  Pricing-create, pricing-update, approveRequest and createDirectBooking all
+  enforce this gate and return 400 when it fails.
+
+KYC state machine:
+  PENDING -> UNDER_REVIEW -> ACTIVATED
+                         \-> NEEDS_CLARIFICATION -> UNDER_REVIEW -> ACTIVATED
+                         \-> REJECTED
+  ACTIVATED can later become SUSPENDED.
+
+================================================================================
+1. GET PAYOUT ACCOUNT
+================================================================================
+GET /api/incubation-portal/payout-account
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payout account fetched",
+  "data": {
+    "id":                              "<cuid>",
+    "tenantId":                        "<cuid>",
+    "legalBusinessName":               "<string>",
+    "businessType":                    "proprietorship|partnership|private_limited|public_limited|llp|trust|society|ngo|individual|null",
+    "accountHolderName":               "<string>",
+    "bankAccountNumber":               "<string>",
+    "bankIfscCode":                    "<string>",
+    "bankName":                        "<string|null>",
+    "bankBranch":                      "<string|null>",
+    "gstNumber":                       "<string|null>",
+    "panNumber":                       "<string|null>",
+    "contactEmail":                    "<email>",
+    "contactPhone":                    "<string>",
+    "addressLine1":                    "<string|null>",
+    "addressLine2":                    "<string|null>",
+    "city":                            "<string|null>",
+    "state":                           "<string|null>",
+    "country":                         "<iso2|null>",
+    "pincode":                         "<string|null>",
+    "razorpayLinkedAccountId":         "acc_xxx|null",
+    "razorpayStakeholderId":           "sth_xxx|null",
+    "razorpayProductConfigurationId":  "acc_prd_xxx|null",
+    "razorpayContactId":               "cont_xxx|null",
+    "razorpayFundAccountId":           "fa_xxx|null",
+    "kycStatus":                       "PENDING|UNDER_REVIEW|NEEDS_CLARIFICATION|ACTIVATED|REJECTED|SUSPENDED",
+    "kycSubmittedAt":                  "<ISO|null>",
+    "activatedAt":                     "<ISO|null>",
+    "kycRejectionReason":              "<string|null>",
+    "isPrimary":                       <bool>,
+    "isActive":                        <bool>,
+    "createdAt":                       "<ISO>",
+    "updatedAt":                       "<ISO>",
+    "documents": [ /* see listDocuments below */ ]
+  }
+}
+  data is null when no account exists.
+
+================================================================================
+2. CREATE PAYOUT ACCOUNT
+================================================================================
+POST /api/incubation-portal/payout-account
+
+Body:
+{
+  "legalBusinessName":   "<string>",          // required
+  "businessType":        "<enum>",            // optional, see enum above
+  "accountHolderName":   "<string>",          // required
+  "bankAccountNumber":   "<string min 6>",    // required
+  "bankIfscCode":        "<11 chars>",        // required
+  "bankName":            "<string>",          // optional
+  "bankBranch":          "<string>",          // optional
+  "gstNumber":           "<string>",          // optional
+  "panNumber":           "<string>",          // optional
+  "contactEmail":        "<email>",           // required
+  "contactPhone":        "<string min 8>",    // required
+  "addressLine1":        "<string>",          // optional
+  "addressLine2":        "<string>",          // optional
+  "city":                "<string>",          // optional
+  "state":               "<string>",          // optional
+  "country":             "<iso2 country>",    // optional, default "IN"
+  "pincode":             "<string>"           // optional
+}
+
+Side effects on success:
+  - Creates a Razorpay Linked Account, Stakeholder, Product Configuration,
+    Contact, and Fund Account.
+  - Persists IncubationPayoutAccount with kycStatus = UNDER_REVIEW
+    (or PENDING if Razorpay creation failed).
+
+Success response (201):
+{
+  "success": true,
+  "status":  201,
+  "message": "Payout account submitted",
+  "data": {
+    "account":         { /* IncubationPayoutAccount fields */ },
+    "razorpayErrors":  null | { "linkedAccount": "...", "stakeholder": "...", ... }
+  }
+}
+
+Errors:
+  409 — "Payout account already exists for this tenant"
+
+================================================================================
+3. UPDATE PAYOUT ACCOUNT
+================================================================================
+PATCH /api/incubation-portal/payout-account
+
+Body: any subset of the create fields (all optional).
+
+Restriction:
+  When kycStatus is ACTIVATED, only the following keys are accepted:
+    contactEmail, contactPhone, addressLine1, addressLine2,
+    city, state, country, pincode
+  All other keys silently dropped.
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payout account updated",
+  "data":    { /* updated IncubationPayoutAccount */ }
+}
+
+================================================================================
+4. RESUBMIT KYC
+================================================================================
+POST /api/incubation-portal/payout-account/resubmit
+
+Use this when kycStatus = NEEDS_CLARIFICATION. Only valid in that state.
+
+Body: subset of create fields (all optional).
+
+Side effects:
+  - Pushes updated info to Razorpay (best-effort).
+  - Sets kycStatus = UNDER_REVIEW, clears kycRejectionReason, refreshes
+    kycSubmittedAt = now().
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payout account resubmitted",
+  "data":    { /* updated IncubationPayoutAccount */ }
+}
+
+Errors:
+  400 — "Resubmit only allowed when KYC needs clarification"
+  404 — "Payout account not found"
+
+================================================================================
+5. DEACTIVATE PAYOUT ACCOUNT
+================================================================================
+DELETE /api/incubation-portal/payout-account
+
+Soft-deactivates the account (sets isActive = false). Blocks if there are
+active office bookings that depend on it.
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payout account deactivated",
+  "data":    { /* updated IncubationPayoutAccount, isActive=false */ }
+}
+
+Errors:
+  400 — "Cannot deactivate while active bookings exist"
+  404 — "Payout account not found"
+
+================================================================================
+6. KYC DOCUMENTS — UPLOAD
+================================================================================
+POST /api/incubation-portal/payout-account/documents
+
+Body:
+{
+  "documentType": "PAN|GST_CERTIFICATE|CANCELLED_CHEQUE|AOA|INCORPORATION|OWNER_AADHAAR|ADDRESS_PROOF|OTHER",  // required
+  "s3Url":        "<https url>",     // required, file already uploaded via S3 signed URL
+  "fileName":     "<string>"         // optional
+}
+
+Success response (201):
+{
+  "success": true,
+  "status":  201,
+  "message": "Document uploaded",
+  "data": {
+    "id":                "<cuid>",
+    "payoutAccountId":   "<cuid>",
+    "documentType":      "<enum>",
+    "s3Url":             "<url>",
+    "fileName":          "<string|null>",
+    "verificationStatus":"PENDING",
+    "createdAt":         "<ISO>",
+    "updatedAt":         "<ISO>"
+  }
+}
+
+================================================================================
+7. KYC DOCUMENTS — LIST
+================================================================================
+GET /api/incubation-portal/payout-account/documents
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Documents fetched",
+  "data": [
+    {
+      "id":                 "<cuid>",
+      "payoutAccountId":    "<cuid>",
+      "documentType":       "<enum>",
+      "s3Url":              "<url>",
+      "fileName":           "<string|null>",
+      "verificationStatus": "PENDING|VERIFIED|REJECTED",
+      "rejectionReason":    "<string|null>",
+      "createdAt":          "<ISO>",
+      "updatedAt":          "<ISO>"
+    }
+  ]
+}
+
+================================================================================
+8. PAYOUT STATUS (DASHBOARD CHIP)
+================================================================================
+GET /api/incubation-portal/payout-account/status
+
+Quick status endpoint for headers/badges. Always returns 200, even when no
+account exists.
+
+Success response (200) — no account:
+{
+  "success": true, "status": 200, "message": "Payout status fetched",
+  "data": {
+    "configured":         false,
+    "kycStatus":          null,
+    "canAcceptPayments":  false,
+    "message":            "Set up your payout account to publish paid offices."
+  }
+}
+
+Success response (200) — account exists:
+{
+  "success": true, "status": 200, "message": "Payout status fetched",
+  "data": {
+    "configured":          true,
+    "kycStatus":           "<enum>",
+    "kycRejectionReason":  "<string|null>",
+    "canAcceptPayments":   <bool>,
+    "activatedAt":         "<ISO|null>"
+  }
+}
+
+The frontend can rely on `canAcceptPayments` to show/hide the "Add paid pricing"
+or "Publish office" CTAs.
+
+================================================================================
+NOTIFICATIONS DRIVEN BY THIS MODULE
+================================================================================
+Razorpay account.* webhooks update kycStatus and push notifications to all
+active IncubationUser members of the tenant via the Notification API:
+  account.under_review        -> "Payout account under review"
+  account.needs_clarification -> "Payout account needs clarification" + reason
+  account.activated           -> "Payout account activated"
+  account.rejected            -> "Payout account rejected" + reason
+  account.suspended           -> "Payout account suspended"

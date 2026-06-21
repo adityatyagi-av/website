@@ -1,0 +1,1003 @@
+================================================================================
+SOCKET.IO CONNECTION GUIDE — FRONTEND INTEGRATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-22
+Backend Library: socket.io (Server)
+Frontend Library: socket.io-client (Client)
+Server Port: process.env.PORT || 7000
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. Overview — Two Socket Systems
+2. Installation & Setup
+3. Support Chat Socket (Default Namespace)
+   3a. SuperAdmin Connection
+   3b. Tenant Admin Connection
+   3c. Events Reference
+4. Universal Chat Socket (/chat Namespace)
+   4a. User Connection
+   4b. Events Reference
+   4c. Sending as STARTUP or PAGE Entity
+5. Connection Lifecycle & Error Handling
+6. Room Architecture
+7. Frontend Code Examples (React)
+8. Troubleshooting
+
+================================================================================
+1. OVERVIEW — TWO SOCKET SYSTEMS
+================================================================================
+
+This backend has TWO independent Socket.IO systems running on the SAME server:
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                        HTTP Server (:7000)                         │
+│                                                                     │
+│  ┌──────────────────────────┐  ┌──────────────────────────────┐    │
+│  │   DEFAULT NAMESPACE "/"  │  │   /chat NAMESPACE            │    │
+│  │   (Support Chat)         │  │   (Universal Chat)           │    │
+│  │                          │  │                              │    │
+│  │   Users:                 │  │   Users:                     │    │
+│  │   - SuperAdmin           │  │   - Ecosystem Users          │    │
+│  │   - Tenant Admin         │  │   - Startup Portal Users     │    │
+│  │                          │  │   - Any authenticated User   │    │
+│  │   Token: SuperAdmin JWT  │  │                              │    │
+│  │     or IncubationUser JWT│  │   Token: User JWT            │    │
+│  │                          │  │   (decoded.id → User table)  │    │
+│  │   CORS: CLIENT_URL env   │  │                              │    │
+│  └──────────────────────────┘  └──────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────┘
+
+IMPORTANT:
+- Support Chat Socket uses the DEFAULT namespace (no path)
+- Universal Chat Socket uses the /chat namespace
+- Both use the SAME server URL
+- Token format is different:
+  - Support Chat: SuperAdmin JWT (has role field) or IncubationUser JWT
+  - Universal Chat: User JWT (ecosystem user from User table)
+- You CANNOT use one token type on the wrong namespace
+
+================================================================================
+2. INSTALLATION & SETUP
+================================================================================
+
+Install socket.io-client:
+  npm install socket.io-client
+
+OR if using yarn:
+  yarn add socket.io-client
+
+Import:
+  import { io } from "socket.io-client";
+
+Environment Variable:
+  NEXT_PUBLIC_SOCKET_URL=http://localhost:7000   (for Next.js)
+  VITE_SOCKET_URL=http://localhost:7000          (for Vite)
+  REACT_APP_SOCKET_URL=http://localhost:7000     (for CRA)
+
+Replace with production URL in production (e.g., https://api.yourdomain.com)
+
+CORS Configuration (Backend):
+  - The backend allows connections from process.env.CLIENT_URL
+  - If CLIENT_URL is not set, it defaults to "*" (all origins)
+  - credentials: true is enabled
+
+================================================================================
+3. SUPPORT CHAT SOCKET (DEFAULT NAMESPACE)
+================================================================================
+
+This is for SuperAdmin ↔ TenantAdmin real-time support messaging.
+
+--------------------------------------------------------------------------------
+3a. SUPERADMIN CONNECTION
+--------------------------------------------------------------------------------
+
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:7000";
+
+const socket = io(SOCKET_URL, {
+  auth: {
+    token: localStorage.getItem("superAdminAccessToken"),
+    // NOTE: Do NOT include "Bearer " prefix — just the raw JWT token
+  },
+  // Alternative: pass via headers
+  // extraHeaders: {
+  //   authorization: "Bearer " + localStorage.getItem("superAdminAccessToken"),
+  // },
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: 5,
+});
+
+Token Requirements:
+- Must be a SuperAdmin JWT token
+- Token payload must have: { id: "superadmin_id", role: "ADMIN" | "MARKETING" | "MANAGER" | "RELATIONSHIP_MANAGER" }
+- The `role` field in the JWT is what identifies this as a SuperAdmin token
+- Token is verified using process.env.ACCESS_SECRET on the server
+
+What Happens On Connect:
+- Server looks up SuperAdmin in the database by decoded.id
+- socket.userType is set to "SUPER_ADMIN"
+- Socket automatically joins room "super-admins"
+- All messages from ALL tenants are broadcast to this room
+
+--------------------------------------------------------------------------------
+3b. TENANT ADMIN CONNECTION
+--------------------------------------------------------------------------------
+
+const socket = io(SOCKET_URL, {
+  auth: {
+    token: localStorage.getItem("incubationAccessToken"),
+  },
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: 5,
+});
+
+Token Requirements:
+- Must be an IncubationUser JWT token
+- Token payload must have: { id: "incubation_user_id" }
+- Token must NOT have a `role` field (or not one of the SuperAdmin roles)
+- The user looked up by decoded.id must have isAdmin: true
+- Non-admin IncubationUsers will be REJECTED with error
+
+What Happens On Connect:
+- Server looks up IncubationUser in the database by decoded.id
+- If user.isAdmin is false → connection rejected with error
+- socket.userType is set to "TENANT_ADMIN"
+- Socket automatically joins room "tenant-{user.tenantId}"
+- Only messages for YOUR tenant are received
+
+Token Extraction Logic (Server Side):
+  // Server checks token in this order:
+  1. socket.handshake.auth.token     (auth object — PREFERRED)
+  2. socket.handshake.headers.authorization?.split(" ")[1]  (headers — fallback)
+  
+  // If using headers, include "Bearer " prefix:
+  // authorization: "Bearer eyJhbGciOiJIUzI1NiIs..."
+  
+  // If using auth object, just the raw token:
+  // auth: { token: "eyJhbGciOiJIUzI1NiIs..." }
+
+--------------------------------------------------------------------------------
+3c. SUPPORT CHAT — EVENTS REFERENCE
+--------------------------------------------------------------------------------
+
+EMIT EVENTS (client → server):
+
+┌──────────────────┬────────────────────────────────────────────────────────┐
+│ Event Name       │ Payload                                                │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ send-message     │ {                                                      │
+│                  │   content: string (REQUIRED),                          │
+│                  │   tenantId: string (REQUIRED for SuperAdmin ONLY,      │
+│                  │     auto-resolved for TenantAdmin)                     │
+│                  │ }                                                      │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ mark-as-read     │ {                                                      │
+│                  │   chatId: string (REQUIRED)                            │
+│                  │ }                                                      │
+│                  │ NOTE: Only SuperAdmin can mark messages as read.       │
+│                  │ TenantAdmin emit is accepted but has no effect.        │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ typing           │ {                                                      │
+│                  │   tenantId: string (REQUIRED for SuperAdmin),          │
+│                  │   isTyping: boolean                                    │
+│                  │ }                                                      │
+│                  │ TenantAdmin: tenantId auto-resolved, broadcasts to     │
+│                  │ "super-admins" room.                                   │
+│                  │ SuperAdmin: broadcasts to "tenant-{tenantId}" room.    │
+└──────────────────┴────────────────────────────────────────────────────────┘
+
+LISTEN EVENTS (server → client):
+
+┌──────────────────┬────────────────────────────────────────────────────────┐
+│ Event Name       │ Payload                                                │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ message-sent     │ {                                                      │
+│                  │   id: string,                                          │
+│                  │   chatId: string,                                      │
+│                  │   senderId: string,                                    │
+│                  │   senderType: "SUPER_ADMIN" | "TENANT_ADMIN",         │
+│                  │   content: string,                                     │
+│                  │   isRead: boolean,                                     │
+│                  │   readBy: string[],                                    │
+│                  │   createdAt: string (ISO),                             │
+│                  │   updatedAt: string (ISO),                             │
+│                  │   sender: {                                            │
+│                  │     id: string,                                        │
+│                  │     name: string,                                      │
+│                  │     type: "SUPER_ADMIN" | "TENANT_ADMIN"              │
+│                  │   },                                                   │
+│                  │   chat: {                                              │
+│                  │     id: string,                                        │
+│                  │     tenantId: string,                                  │
+│                  │     tenant: {                                          │
+│                  │       id: string,                                      │
+│                  │       organizationName: string,                        │
+│                  │       tenantKey: string                                │
+│                  │     }                                                  │
+│                  │   }                                                    │
+│                  │ }                                                      │
+│                  │ NOTE: Sent to the SENDER as confirmation.              │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ new-message      │ Same payload as message-sent.                          │
+│                  │ NOTE: Sent to RECIPIENTS (not the sender).             │
+│                  │ - TenantAdmin sends → broadcast to "super-admins"     │
+│                  │ - SuperAdmin sends → broadcast to "tenant-{tenantId}" │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ messages-read    │ { chatId: string }                                     │
+│                  │ NOTE: Confirmation that messages were marked as read.  │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ user-typing      │ {                                                      │
+│                  │   tenantId: string (only when tenant is typing),       │
+│                  │   userName: string,                                    │
+│                  │   isTyping: boolean                                    │
+│                  │ }                                                      │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ error            │ { message: string }                                    │
+│                  │ Emitted on any server-side error.                      │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ connect_error    │ Error object with message property.                    │
+│                  │ Fired by socket.io-client on auth failure.             │
+│                  │ err.message = "Authentication error: ..."             │
+└──────────────────┴────────────────────────────────────────────────────────┘
+
+================================================================================
+4. UNIVERSAL CHAT SOCKET (/chat NAMESPACE)
+================================================================================
+
+This is for user-to-user, user-to-page, user-to-startup, mentorship messaging.
+
+--------------------------------------------------------------------------------
+4a. USER CONNECTION
+--------------------------------------------------------------------------------
+
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:7000";
+
+const socket = io(`${SOCKET_URL}/chat`, {
+  //                         ^^^^^^^ IMPORTANT: /chat namespace path
+  auth: {
+    token: localStorage.getItem("userAccessToken"),
+    // Raw JWT token, no "Bearer " prefix
+  },
+  // Alternative: pass via headers
+  // extraHeaders: {
+  //   authorization: "Bearer " + localStorage.getItem("userAccessToken"),
+  // },
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: 5,
+});
+
+Token Requirements:
+- Must be a User JWT token (ecosystem user)
+- Token payload must have: { id: "user_id" }
+- decoded.id is looked up in the User table (not SuperAdmin, not IncubationUser)
+- User must exist in database
+
+What Happens On Connect:
+- Server looks up User by decoded.id
+  - Selects: id, firstName, lastName, profilePhoto, email
+- Constructs display name: `${firstName} ${lastName}`.trim()
+- Socket joins room "user:{userId}"
+- Console logs: "User {name} connected to chat"
+
+Token Extraction Logic (Server Side):
+  // Same as support chat — checks in this order:
+  1. socket.handshake.auth.token
+  2. socket.handshake.headers.authorization?.split(" ")[1]
+
+--------------------------------------------------------------------------------
+4b. UNIVERSAL CHAT — EVENTS REFERENCE
+--------------------------------------------------------------------------------
+
+EMIT EVENTS (client → server):
+
+┌────────────────────┬──────────────────────────────────────────────────────┐
+│ Event Name         │ Payload                                              │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ join-conversation  │ conversationId (string — just the ID, not an object) │
+│                    │                                                      │
+│                    │ Example: socket.emit("join-conversation", "abc123")  │
+│                    │                                                      │
+│                    │ Server verifies you are participant1 or participant2 │
+│                    │ On success: joins room "conversation:{id}",          │
+│                    │   emits "joined-conversation" { conversationId }     │
+│                    │ On failure: emits "error"                            │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ leave-conversation │ conversationId (string — just the ID)                │
+│                    │                                                      │
+│                    │ Example: socket.emit("leave-conversation", "abc123") │
+│                    │                                                      │
+│                    │ Leaves room "conversation:{id}". No response event.  │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ send-message       │ {                                                    │
+│                    │   conversationId: string (REQUIRED),                 │
+│                    │   content: string (REQUIRED if no attachments),      │
+│                    │   messageType: "TEXT" | "IMAGE" | "FILE" (Optional,  │
+│                    │     default: "TEXT"),                                 │
+│                    │   replyToId: string | null (Optional),               │
+│                    │   attachments: Array (Optional),                     │
+│                    │   startupId: string (Optional — send as STARTUP),    │
+│                    │   pageId: string (Optional — send as PAGE)           │
+│                    │ }                                                    │
+│                    │                                                      │
+│                    │ Validation: content must be non-empty OR attachments │
+│                    │   must be non-empty. At least one required.          │
+│                    │                                                      │
+│                    │ By default senderType = "USER" (your user account).  │
+│                    │ Pass startupId to send as STARTUP entity.            │
+│                    │ Pass pageId to send as PAGE entity.                  │
+│                    │ See section 4c for full STARTUP/PAGE usage guide.    │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ typing             │ {                                                    │
+│                    │   conversationId: string (REQUIRED),                 │
+│                    │   isTyping: boolean                                  │
+│                    │ }                                                    │
+│                    │                                                      │
+│                    │ Broadcasts to conversation room (excludes sender).   │
+│                    │ No startupId/pageId needed — indicator is per-user.  │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ mark-read          │ {                                                    │
+│                    │   conversationId: string (REQUIRED),                 │
+│                    │   startupId: string (Optional — for STARTUP reads),  │
+│                    │   pageId: string (Optional — for PAGE reads)         │
+│                    │ }                                                    │
+│                    │                                                      │
+│                    │ Resets unreadCount for this user/entity.             │
+│                    │ Pass startupId to reset the STARTUP's unread count.  │
+│                    │ Pass pageId to reset the PAGE's unread count.        │
+│                    │ Emits "messages-read" to sender.                     │
+│                    │ Emits "participant-read" to conversation room.       │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ delete-message     │ {                                                    │
+│                    │   messageId: string (REQUIRED),                      │
+│                    │   conversationId: string (REQUIRED),                 │
+│                    │   startupId: string (Optional — if msg sent as       │
+│                    │     STARTUP, pass the startupId to match senderId),  │
+│                    │   pageId: string (Optional — if msg sent as PAGE,    │
+│                    │     pass the pageId to match senderId)               │
+│                    │ }                                                    │
+│                    │                                                      │
+│                    │ Soft-deletes message (content → null).               │
+│                    │ The senderId used for ownership check is:            │
+│                    │   startupId (if provided) > pageId > userId          │
+│                    │ Emits "message-deleted" to conversation room.        │
+├────────────────────┼──────────────────────────────────────────────────────┤
+│ edit-message       │ {                                                    │
+│                    │   messageId: string (REQUIRED),                      │
+│                    │   conversationId: string (REQUIRED),                 │
+│                    │   content: string (REQUIRED — new content),          │
+│                    │   startupId: string (Optional — if msg sent as       │
+│                    │     STARTUP, pass the startupId to match senderId),  │
+│                    │   pageId: string (Optional — if msg sent as PAGE,    │
+│                    │     pass the pageId to match senderId)               │
+│                    │ }                                                    │
+│                    │                                                      │
+│                    │ Only within 5 minutes of sending.                    │
+│                    │ The senderId used for ownership check is:            │
+│                    │   startupId (if provided) > pageId > userId          │
+│                    │ Emits "message-edited" to conversation room.         │
+└────────────────────┴──────────────────────────────────────────────────────┘
+
+LISTEN EVENTS (server → client):
+
+┌──────────────────────┬────────────────────────────────────────────────────┐
+│ Event Name           │ Payload                                            │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ joined-conversation  │ { conversationId: string }                         │
+│                      │ Confirmation after join-conversation.              │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ message-sent         │ {                                                  │
+│                      │   id: string,                                      │
+│                      │   conversationId: string,                          │
+│                      │   senderId: string,                                │
+│                      │   senderType: "USER",                              │
+│                      │   content: string,                                 │
+│                      │   messageType: "TEXT" | "IMAGE" | "FILE",          │
+│                      │   replyToId: string | null,                        │
+│                      │   attachments: JSON | null,                        │
+│                      │   isRead: false,                                   │
+│                      │   isEdited: false,                                 │
+│                      │   isDeleted: false,                                │
+│                      │   createdAt: string (ISO),                         │
+│                      │   sender: {                                        │
+│                      │     id: string,                                    │
+│                      │     name: string,                                  │
+│                      │     avatar: string | null,                         │
+│                      │     type: "USER"                                   │
+│                      │   }                                                │
+│                      │ }                                                  │
+│                      │ Sent to SENDER only as confirmation.               │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ new-message          │ Same payload as message-sent.                      │
+│                      │ Sent to ALL in conversation room EXCEPT sender.    │
+│                      │ This is the event to listen for incoming messages.  │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ conversation-updated │ {                                                  │
+│                      │   conversationId: string,                          │
+│                      │   lastMessage: { ... } (full message object)       │
+│                      │ }                                                  │
+│                      │ Sent to the "user:{participantId}" room for each   │
+│                      │ participant who is NOT the sender.                  │
+│                      │ PURPOSE: Update chat list sidebar even if user     │
+│                      │ hasn't joined the conversation room yet.            │
+│                      │ This is KEY for the chat list — listen for this    │
+│                      │ event to update last message and unread badges.     │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ user-typing          │ {                                                  │
+│                      │   conversationId: string,                          │
+│                      │   userId: string,                                  │
+│                      │   userName: string,                                │
+│                      │   isTyping: boolean                                │
+│                      │ }                                                  │
+│                      │ Sent to conversation room (excludes sender).       │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ messages-read        │ { conversationId: string }                         │
+│                      │ Confirmation to SENDER that their read was saved.  │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ participant-read     │ {                                                  │
+│                      │   conversationId: string,                          │
+│                      │   userId: string,                                  │
+│                      │   readAt: string (ISO)                             │
+│                      │ }                                                  │
+│                      │ Sent to conversation room (excludes reader).       │
+│                      │ Use this to show "seen" / read receipts.           │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ message-deleted      │ {                                                  │
+│                      │   messageId: string,                               │
+│                      │   conversationId: string                           │
+│                      │ }                                                  │
+│                      │ Sent to EVERYONE in conversation room.             │
+│                      │ Update UI to show "message deleted".               │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ message-edited       │ {                                                  │
+│                      │   messageId: string,                               │
+│                      │   conversationId: string,                          │
+│                      │   content: string (new content),                   │
+│                      │   editedAt: string (ISO)                           │
+│                      │ }                                                  │
+│                      │ Sent to EVERYONE in conversation room.             │
+│                      │ Update message content and show "(edited)".        │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ error                │ { message: string }                                │
+│                      │ Emitted on any server-side error.                  │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ connect_error        │ Error object. err.message for details.             │
+│                      │ Fired by socket.io-client on auth failure.         │
+└──────────────────────┴────────────────────────────────────────────────────┘
+
+--------------------------------------------------------------------------------
+4c. SENDING AS STARTUP OR PAGE ENTITY
+--------------------------------------------------------------------------------
+
+KEY CONCEPT:
+  The socket connection is ALWAYS authenticated as the ecosystem User (User JWT).
+  To act as a STARTUP or PAGE, you pass startupId or pageId in each event payload.
+  The backend validates your membership on every event — no special connection needed.
+
+  The socket automatically handles entity resolution:
+  - No startupId/pageId → senderType = "USER",  senderId = your userId
+  - startupId provided  → senderType = "STARTUP", senderId = startupId (after membership check)
+  - pageId provided     → senderType = "PAGE",    senderId = pageId (after membership check)
+
+  join-conversation does NOT need startupId/pageId. The backend checks ALL your
+  startup and page memberships automatically when you join.
+
+STARTUP EXAMPLES:
+
+  // Connect (same user token, no change needed)
+  const socket = io(`${SOCKET_URL}/chat`, { auth: { token: userJWT } });
+
+  // Join a startup's conversation (no startupId needed)
+  socket.emit("join-conversation", "cuid_conv_1");
+
+  // Send message as STARTUP (add startupId)
+  socket.emit("send-message", {
+    conversationId: "cuid_conv_1",
+    content: "Hello from our startup!",
+    startupId: "cuid_startup_1"       // ← makes message appear as startup name/logo
+  });
+
+  // Mark read for startup's unread count
+  socket.emit("mark-read", {
+    conversationId: "cuid_conv_1",
+    startupId: "cuid_startup_1"       // ← resets STARTUP's unread count, not user's
+  });
+
+  // Edit a message that was sent as startup
+  socket.emit("edit-message", {
+    messageId: "cuid_msg_1",
+    conversationId: "cuid_conv_1",
+    content: "Updated text",
+    startupId: "cuid_startup_1"       // ← required: message's senderId = startupId
+  });
+
+  // Delete a message that was sent as startup
+  socket.emit("delete-message", {
+    messageId: "cuid_msg_1",
+    conversationId: "cuid_conv_1",
+    startupId: "cuid_startup_1"       // ← required: message's senderId = startupId
+  });
+
+PAGE EXAMPLES:
+
+  // Send message as PAGE (add pageId)
+  socket.emit("send-message", {
+    conversationId: "cuid_conv_1",
+    content: "Hello from our page!",
+    pageId: "cuid_page_1"             // ← makes message appear as page name/logo
+  });
+
+  // Mark read for page's unread count
+  socket.emit("mark-read", {
+    conversationId: "cuid_conv_1",
+    pageId: "cuid_page_1"
+  });
+
+  // Edit a message that was sent as page
+  socket.emit("edit-message", {
+    messageId: "cuid_msg_1",
+    conversationId: "cuid_conv_1",
+    content: "Updated text",
+    pageId: "cuid_page_1"
+  });
+
+  // Delete a message that was sent as page
+  socket.emit("delete-message", {
+    messageId: "cuid_msg_1",
+    conversationId: "cuid_conv_1",
+    pageId: "cuid_page_1"
+  });
+
+WHY THE SENDER ID MATTERS FOR EDIT/DELETE:
+  When a message is sent as STARTUP, its senderId in the database = startupId (not userId).
+  The ownership check uses senderId to find the message.
+  So to edit/delete a startup-sent message, you MUST pass startupId so the backend
+  resolves the correct senderId. Same logic applies for PAGE messages with pageId.
+
+WHAT MESSAGE RECIPIENTS SEE:
+  // User sends without startupId:
+  message.senderType = "USER"
+  message.sender.name = "Vansh Chauhan"
+  message.sender.avatar = "https://cdn.../user_photo.jpg"
+
+  // User sends WITH startupId:
+  message.senderType = "STARTUP"
+  message.sender.name = "My TechStartup"
+  message.sender.avatar = "https://cdn.../startup_logo.png"
+
+  // User sends WITH pageId:
+  message.senderType = "PAGE"
+  message.sender.name = "Innovation Hub Page"
+  message.sender.avatar = "https://cdn.../page_logo.png"
+
+ERROR RESPONSES:
+  { message: "You are not a member of this startup" }  — invalid/inactive startupId
+  { message: "You are not a member of this page" }     — invalid pageId
+  { message: "Message not found or you cannot delete this message" }
+    — wrong startupId/pageId for edit/delete (senderId mismatch)
+
+================================================================================
+5. CONNECTION LIFECYCLE & ERROR HANDLING
+================================================================================
+
+Connection Events (built-in socket.io-client events):
+
+  socket.on("connect", () => {
+    console.log("Connected! Socket ID:", socket.id);
+    // Safe to emit events now
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("Disconnected:", reason);
+    // reason: "io server disconnect", "transport close", "ping timeout", etc.
+  });
+
+  socket.on("connect_error", (err) => {
+    console.error("Connection error:", err.message);
+    // Common errors:
+    // "Authentication error: No token provided"
+    // "Authentication error: User not found"
+    // "Authentication error: Only tenant admins can chat"
+    // "Authentication error: jwt expired"
+    // "Authentication error: invalid signature"
+    
+    // If token expired, refresh and reconnect:
+    if (err.message.includes("expired")) {
+      refreshToken().then((newToken) => {
+        socket.auth.token = newToken;
+        socket.connect();
+      });
+    }
+  });
+
+  socket.on("reconnect", (attemptNumber) => {
+    console.log("Reconnected after", attemptNumber, "attempts");
+    // Re-join any conversation rooms after reconnect
+  });
+
+  socket.on("reconnect_attempt", (attemptNumber) => {
+    console.log("Reconnect attempt", attemptNumber);
+  });
+
+  socket.on("reconnect_failed", () => {
+    console.log("Reconnection failed after all attempts");
+    // Show user a "connection lost" banner
+  });
+
+Token Update on Reconnection:
+  // If your token refreshes, update before reconnect:
+  socket.auth.token = newToken;
+  socket.connect();
+
+Graceful Disconnect:
+  socket.disconnect();
+
+================================================================================
+6. ROOM ARCHITECTURE
+================================================================================
+
+Support Chat (Default Namespace "/"):
+
+  Room Name                │ Who Joins            │ Purpose
+  ─────────────────────────┼──────────────────────┼──────────────────────
+  "super-admins"           │ All SuperAdmin users │ Receive all tenant msgs
+  "tenant-{tenantId}"      │ Tenant's admins      │ Receive SuperAdmin msgs
+
+Universal Chat (/chat Namespace):
+
+  Room Name                │ Who Joins            │ Purpose
+  ─────────────────────────┼──────────────────────┼──────────────────────
+  "user:{userId}"          │ Auto on connect      │ Personal notifications,
+                           │                      │ conversation-updated
+  "conversation:{convId}"  │ Manual via           │ Real-time messages,
+                           │ join-conversation    │ typing, read receipts
+
+IMPORTANT about "conversation-updated" event:
+  - This event is sent to "user:{participantId}" rooms, NOT conversation rooms
+  - This means you receive it EVEN IF you haven't joined the conversation room
+  - Use this to update your chat list (sidebar) with new last messages
+  - When a user sends a message, the OTHER participant(s) receive both:
+    a) "new-message" in the conversation room (if they've joined it)
+    b) "conversation-updated" in their user room (always, if connected)
+
+================================================================================
+7. FRONTEND CODE EXAMPLES (REACT)
+================================================================================
+
+--------------------------------------------------------------------------------
+Example 1: Support Chat Hook (SuperAdmin)
+--------------------------------------------------------------------------------
+
+// hooks/useSupportChatSocket.js
+import { useEffect, useRef, useCallback } from "react";
+import { io } from "socket.io-client";
+
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:7000";
+
+export function useSupportChatSocket({ token, onMessage, onTyping, onError }) {
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    if (!token) return;
+
+    // Connect to DEFAULT namespace (no /chat path)
+    const socket = io(SOCKET_URL, {
+      auth: { token },
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+    });
+
+    socket.on("connect", () => {
+      console.log("Support chat connected");
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Auth error:", err.message);
+      onError?.(err.message);
+    });
+
+    socket.on("new-message", (message) => {
+      onMessage?.(message);
+    });
+
+    socket.on("message-sent", (message) => {
+      onMessage?.(message);
+    });
+
+    socket.on("user-typing", (data) => {
+      onTyping?.(data);
+    });
+
+    socket.on("messages-read", (data) => {
+      // Handle read receipt
+    });
+
+    socket.on("error", (data) => {
+      onError?.(data.message);
+    });
+
+    socketRef.current = socket;
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [token]);
+
+  const sendMessage = useCallback((content, tenantId) => {
+    socketRef.current?.emit("send-message", { content, tenantId });
+  }, []);
+
+  const markAsRead = useCallback((chatId) => {
+    socketRef.current?.emit("mark-as-read", { chatId });
+  }, []);
+
+  const setTyping = useCallback((tenantId, isTyping) => {
+    socketRef.current?.emit("typing", { tenantId, isTyping });
+  }, []);
+
+  return { sendMessage, markAsRead, setTyping, socket: socketRef };
+}
+
+// Usage in component:
+// const { sendMessage, markAsRead } = useSupportChatSocket({
+//   token: superAdminToken,
+//   onMessage: (msg) => setMessages(prev => [...prev, msg]),
+//   onTyping: (data) => setIsTyping(data.isTyping),
+//   onError: (err) => toast.error(err),
+// });
+
+--------------------------------------------------------------------------------
+Example 2: Universal Chat Hook (Ecosystem User)
+--------------------------------------------------------------------------------
+
+// hooks/useUniversalChatSocket.js
+import { useEffect, useRef, useCallback } from "react";
+import { io } from "socket.io-client";
+
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:7000";
+
+export function useUniversalChatSocket({ token, onNewMessage, onConversationUpdated, onTyping, onError }) {
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    if (!token) return;
+
+    // Connect to /chat namespace
+    const socket = io(`${SOCKET_URL}/chat`, {
+      auth: { token },
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+    });
+
+    socket.on("connect", () => {
+      console.log("Universal chat connected");
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Auth error:", err.message);
+      onError?.(err.message);
+    });
+
+    // New message in active conversation
+    socket.on("new-message", (message) => {
+      onNewMessage?.(message);
+    });
+
+    // Sent message confirmation
+    socket.on("message-sent", (message) => {
+      onNewMessage?.(message);
+    });
+
+    // Chat list update (even without joining conversation)
+    socket.on("conversation-updated", (data) => {
+      onConversationUpdated?.(data);
+    });
+
+    // Typing indicator
+    socket.on("user-typing", (data) => {
+      onTyping?.(data);
+    });
+
+    // Read receipts
+    socket.on("messages-read", (data) => {
+      // Your own read was confirmed
+    });
+
+    socket.on("participant-read", (data) => {
+      // Other person read your message — show "seen"
+    });
+
+    // Message updates
+    socket.on("message-deleted", (data) => {
+      // Update message UI — show "deleted"
+    });
+
+    socket.on("message-edited", (data) => {
+      // Update message content — show "(edited)"
+    });
+
+    socket.on("error", (data) => {
+      onError?.(data.message);
+    });
+
+    socketRef.current = socket;
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [token]);
+
+  const joinConversation = useCallback((conversationId) => {
+    socketRef.current?.emit("join-conversation", conversationId);
+  }, []);
+
+  const leaveConversation = useCallback((conversationId) => {
+    socketRef.current?.emit("leave-conversation", conversationId);
+  }, []);
+
+  // entityId: optional startupId or pageId to act as that entity
+  // entityType: "STARTUP" | "PAGE" | undefined
+  const sendMessage = useCallback((conversationId, content, options = {}) => {
+    const payload = {
+      conversationId,
+      content,
+      messageType: options.messageType || "TEXT",
+      replyToId: options.replyToId || undefined,
+      attachments: options.attachments || undefined,
+    };
+    // To send as STARTUP: options.entityType="STARTUP", options.entityId="startup_id"
+    // To send as PAGE:    options.entityType="PAGE",    options.entityId="page_id"
+    if (options.entityType === "STARTUP" && options.entityId) payload.startupId = options.entityId;
+    if (options.entityType === "PAGE" && options.entityId) payload.pageId = options.entityId;
+    socketRef.current?.emit("send-message", payload);
+  }, []);
+
+  const markRead = useCallback((conversationId, options = {}) => {
+    const payload = { conversationId };
+    if (options.entityType === "STARTUP" && options.entityId) payload.startupId = options.entityId;
+    if (options.entityType === "PAGE" && options.entityId) payload.pageId = options.entityId;
+    socketRef.current?.emit("mark-read", payload);
+  }, []);
+
+  const setTyping = useCallback((conversationId, isTyping) => {
+    socketRef.current?.emit("typing", { conversationId, isTyping });
+  }, []);
+
+  const deleteMessage = useCallback((messageId, conversationId, options = {}) => {
+    const payload = { messageId, conversationId };
+    if (options.entityType === "STARTUP" && options.entityId) payload.startupId = options.entityId;
+    if (options.entityType === "PAGE" && options.entityId) payload.pageId = options.entityId;
+    socketRef.current?.emit("delete-message", payload);
+  }, []);
+
+  const editMessage = useCallback((messageId, conversationId, content, options = {}) => {
+    const payload = { messageId, conversationId, content };
+    if (options.entityType === "STARTUP" && options.entityId) payload.startupId = options.entityId;
+    if (options.entityType === "PAGE" && options.entityId) payload.pageId = options.entityId;
+    socketRef.current?.emit("edit-message", payload);
+  }, []);
+
+  return {
+    joinConversation,
+    leaveConversation,
+    sendMessage,
+    markRead,
+    setTyping,
+    deleteMessage,
+    editMessage,
+    socket: socketRef,
+  };
+}
+
+// Usage — Ecosystem User (personal chat):
+// const { joinConversation, sendMessage, markRead } = useUniversalChatSocket({ token });
+// sendMessage(convId, "Hello!");
+// markRead(convId);
+// deleteMessage(msgId, convId);
+// editMessage(msgId, convId, "Updated text");
+
+// Usage — Startup Portal (acting as startup):
+// const entityOptions = { entityType: "STARTUP", entityId: currentStartupId };
+// sendMessage(convId, "Hello!", entityOptions);
+// markRead(convId, entityOptions);
+// deleteMessage(msgId, convId, entityOptions);
+// editMessage(msgId, convId, "Updated text", entityOptions);
+
+// Usage — Page Portal (acting as page):
+// const entityOptions = { entityType: "PAGE", entityId: currentPageId };
+// sendMessage(convId, "Hello!", entityOptions);
+// markRead(convId, entityOptions);
+
+// When opening a conversation (join-conversation needs no entity params):
+// useEffect(() => {
+//   if (conversationId) {
+//     joinConversation(conversationId);
+//     markRead(conversationId, entityOptions);   // pass entity if in startup/page portal
+//     return () => leaveConversation(conversationId);
+//   }
+// }, [conversationId]);
+
+================================================================================
+8. TROUBLESHOOTING
+================================================================================
+
+Problem: "Authentication error: No token provided"
+Solution: Make sure token is passed in socket.handshake.auth.token
+          OR socket.handshake.headers.authorization with "Bearer " prefix.
+          Check that the token is not null/undefined.
+
+Problem: "Authentication error: jwt expired"
+Solution: Refresh the token and reconnect:
+          socket.auth.token = newToken;
+          socket.connect();
+
+Problem: "Authentication error: Only tenant admins can chat"
+Solution: The token belongs to an IncubationUser with isAdmin: false.
+          Only admin users can connect to support chat.
+
+Problem: "Authentication error: User not found"
+Solution: The token's decoded.id doesn't match any record in the database.
+          Possible causes: user deleted, wrong JWT secret, wrong user table.
+
+Problem: Connected but not receiving messages
+Solution:
+  - For support chat: SuperAdmins must be in "super-admins" room (auto).
+    TenantAdmins must be in "tenant-{tenantId}" room (auto).
+  - For universal chat: You must emit "join-conversation" with the conversationId
+    to join the conversation room BEFORE you can receive messages.
+  - Check that you're listening for the correct event name ("new-message").
+
+Problem: "conversation-updated" not received but "new-message" works
+Solution: "conversation-updated" is sent to "user:{userId}" room, which you
+          join automatically on connect. If not receiving, your socket may
+          have disconnected — check connection status.
+
+Problem: Messages sent from REST API don't trigger socket events
+Solution: REST API endpoints don't emit socket events — they only save to DB.
+          For real-time, use socket "send-message" instead.
+          Exception: The conversation stats (unreadCount, lastMessage) are
+          updated in both cases.
+
+Problem: CORS errors
+Solution: Ensure the backend's CLIENT_URL env variable matches your
+          frontend's origin (protocol + domain + port).
+          E.g., CLIENT_URL=http://localhost:3000
+
+Problem: Multiple socket connections
+Solution: Always clean up socket connections on component unmount.
+          Use the cleanup function pattern shown in the React examples.
+          Never create a new socket instance on every render.
+
+Problem: Messages showing as user name instead of startup/page name
+Solution: You forgot to pass startupId (or pageId) in the send-message payload.
+          Without it, senderType defaults to "USER" and your personal name/avatar shows.
+          socket.emit("send-message", { conversationId, content, startupId: "xxx" })
+
+Problem: "Message not found or you cannot delete/edit this message" when editing startup msg
+Solution: The message was sent as STARTUP so its senderId = startupId (not userId).
+          You must pass startupId in the delete/edit payload to match the senderId check.
+          socket.emit("delete-message", { messageId, conversationId, startupId: "xxx" })
+
+Problem: "You are not a member of this startup/page"
+Solution: The user's account (from the JWT) has no active StartupMember/PageMember record
+          for the provided startupId/pageId. Check membership in the database.
+
+Problem: "conversation-updated" not received but "new-message" works
+Solution: "conversation-updated" is sent to "user:{userId}" room, which you join
+          automatically on connect. If not receiving, your socket may have disconnected.
+          NOTE: This event is sent to the OTHER participant, not the sender. The sender
+          receives "message-sent" instead.
+
+Problem: Startup or page user can't join a conversation room
+Solution: join-conversation checks all startup/page memberships automatically.
+          The user just needs to be an active StartupMember or PageMember of ANY
+          startup/page that is a participant in the conversation.

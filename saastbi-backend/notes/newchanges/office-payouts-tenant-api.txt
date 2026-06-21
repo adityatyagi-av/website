@@ -1,0 +1,168 @@
+================================================================================
+OFFICE PAYOUTS API — INCUBATION (TENANT) PORTAL
+================================================================================
+
+Base URL prefix:  /api/incubation-portal
+Auth middleware:  authenticatePortal
+
+Required headers:
+  Authorization: Bearer <accessToken>
+  tenantkey:     <tenantKey>
+
+Common envelope:
+{ "success": <bool>, "status": <httpStatus>, "data": <object|array|null>, "message": <string|null> }
+
+What is a payout?
+  Whenever a customer payment for an office (one-time or recurring) is captured
+  on Razorpay, Razorpay performs a Route Transfer to the tenant's Linked
+  Account. We mirror that transfer as an OfficePayout row.
+
+================================================================================
+1. LIST PAYOUTS
+================================================================================
+GET /api/incubation-portal/office/payouts
+
+Query params (all optional):
+  page    integer >= 1   default 1
+  limit   integer 1-100  default 10
+  status  enum           one of: CREATED | PENDING | PROCESSED | REVERSED | FAILED
+  from    ISO date       inclusive lower bound on createdAt
+  to      ISO date       inclusive upper bound on createdAt
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payouts fetched",
+  "data": {
+    "data": [
+      {
+        "id":                  "<cuid>",
+        "tenantId":            "<cuid>",
+        "payoutAccountId":     "<cuid|null>",
+        "paymentId":           "<cuid|null>",
+        "razorpayTransferId":  "trf_xxx|null",
+        "razorpaySettlementId":"setl_xxx|null",
+        "amount":              <number>,        // gross amount paid out (rupees)
+        "currency":            "INR",
+        "status":              "CREATED|PENDING|PROCESSED|REVERSED|FAILED",
+        "payoutDate":          "<ISO|null>",
+        "failureReason":       "<string|null>",
+        "metadata":            <object|null>,
+        "createdAt":           "<ISO>",
+        "updatedAt":           "<ISO>",
+        "payment": {                            // nullable
+          "id":              "<cuid>",
+          "amount":          <number>,
+          "currency":        "INR",
+          "razorpayPaymentId":"pay_xxx|null",
+          "bookingId":       "<cuid>",
+          "createdAt":       "<ISO>"
+        },
+        "payoutAccount": {                      // nullable
+          "id":                       "<cuid>",
+          "legalBusinessName":        "<string>",
+          "razorpayLinkedAccountId":  "acc_xxx|null"
+        }
+      }
+    ],
+    "total":      <int>,
+    "page":       <int>,
+    "limit":      <int>,
+    "totalPages": <int>,
+    "summary": {                                 // counts/sums by status
+      "CREATED":   { "count": <int>, "amount": <number> },
+      "PENDING":   { "count": <int>, "amount": <number> },
+      "PROCESSED": { "count": <int>, "amount": <number> },
+      "REVERSED":  { "count": <int>, "amount": <number> },
+      "FAILED":    { "count": <int>, "amount": <number> }
+    }
+  }
+}
+
+Note: `summary` is unfiltered (covers ALL payouts for the tenant), while
+`data` is paginated/filtered. Use `summary` for the dashboard tiles and
+`data` for the table.
+
+================================================================================
+2. PAYOUT SUMMARY (DASHBOARD TILES)
+================================================================================
+GET /api/incubation-portal/office/payouts/summary
+
+Use this for the main payouts overview screen. Same data the list endpoint
+returns under `summary`, plus account info.
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payout summary fetched",
+  "data": {
+    "totalAmount":  <number>,    // sum of all payouts (any status)
+    "totalCount":   <int>,
+    "byStatus": {
+      "CREATED":   { "count": <int>, "amount": <number> },
+      "PENDING":   { "count": <int>, "amount": <number> },
+      "PROCESSED": { "count": <int>, "amount": <number> },
+      "REVERSED":  { "count": <int>, "amount": <number> },
+      "FAILED":    { "count": <int>, "amount": <number> }
+    },
+    "account": {                                  // nullable
+      "kycStatus":              "PENDING|UNDER_REVIEW|NEEDS_CLARIFICATION|ACTIVATED|REJECTED|SUSPENDED",
+      "isActive":               <bool>,
+      "razorpayLinkedAccountId":"acc_xxx|null",
+      "activatedAt":            "<ISO|null>"
+    }
+  }
+}
+
+If there is no payout account configured, `account` is null. The frontend
+should then show a "Set up payout account" CTA pointing to the payout-account
+endpoints.
+
+================================================================================
+3. GET ONE PAYOUT
+================================================================================
+GET /api/incubation-portal/office/payouts/:payoutId
+
+Path params:
+  payoutId — OfficePayout.id
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Payout fetched",
+  "data": {
+    /* all OfficePayout fields */
+    "payment": {                                  // nullable
+      /* full OfficePayment fields, plus: */
+      "booking": {
+        "id":"<cuid>", "officeId":"<cuid>",
+        "office":         { "id":"<cuid>", "name":"<string>", "location":"<string|null>" },
+        "bookerStartup":  { "id":"<cuid>", "name":"<string>" } | null
+      }
+    },
+    "payoutAccount": { /* full IncubationPayoutAccount object */ }
+  }
+}
+
+Errors:
+  403 — "Not authorized"           (payout belongs to a different tenant)
+  404 — "Payout not found"
+
+================================================================================
+PAYOUT STATUS LIFECYCLE
+================================================================================
+  CREATED   — Transfer registered with Razorpay; not yet executed.
+  PENDING   — In-flight. Razorpay is processing the transfer.
+  PROCESSED — Funds settled into the tenant's bank account.
+              `payoutDate` reflects the settlement timestamp.
+  REVERSED  — Original payment was refunded; transfer rolled back.
+  FAILED    — Transfer failed; `failureReason` is populated.
+              Manual reconciliation usually required.
+
+Updates flow in via the Razorpay webhook:
+  transfer.processed  -> sets PROCESSED + payoutDate
+  transfer.failed     -> sets FAILED + failureReason
+  refund.processed    -> sets REVERSED on linked transfer

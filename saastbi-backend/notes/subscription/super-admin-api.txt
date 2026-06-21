@@ -1,0 +1,2446 @@
+================================================================================
+SUPER ADMIN — COMPLETE API DOCUMENTATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-03-29
+Base URL: /api/super-admin
+Auth: Bearer Token (authenticate middleware) — required on all endpoints
+  except /sign-up, /login, and /refresh
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+  SECTION A — AUTHENTICATION (5 endpoints)
+  SECTION B — MODULE MANAGEMENT (5 endpoints)
+  SECTION C — PLAN MANAGEMENT (4 endpoints)
+  SECTION D — TENANT MANAGEMENT (3 endpoints)
+  SECTION E — INVOICE MANAGEMENT (1 endpoint)
+  SECTION F — ADDON MANAGEMENT (5 endpoints)
+  SECTION G — ADDON REQUEST MANAGEMENT (3 endpoints)
+  SECTION H — SUBSCRIPTION OVERSIGHT (4 endpoints, under /api/incubation)
+  SECTION I — CHAT MANAGEMENT (3 endpoints)
+
+  Total: 33 endpoints
+
+================================================================================
+SCHEMA CROSS-REFERENCE — DATA MODELS
+================================================================================
+
+SuperAdmin (prisma model: SuperAdmin):
+  - id: String (cuid, primary key)
+  - name: String
+  - email: String (unique)
+  - password: String (hashed with argon2)
+  - role: SuperAdminRoles — "ADMIN" | "MARKETING" | "MANAGER" | "RELATIONSHIP_MANAGER"
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Module (prisma model: Module):
+  - id: String (cuid)
+  - moduleName: String (unique)
+  - moduleKey: String (unique)
+  - moduleDescription: String
+  - isActive: Boolean (default: false)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - permissions: Permission[]
+  - planModules: PlanModule[]
+
+Permission (prisma model: Permission):
+  - id: String (cuid)
+  - action: String (e.g., "C", "R", "U", "D", "F")
+  - moduleId: String (FK -> Module)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Plan (prisma model: Plan):
+  - id: String (cuid)
+  - name: String
+  - price: Float (INR)
+  - type: PlanType — "MONTHLY" | "YEARLY" | "WEEKLY"
+  - maxUsers: Int (default: 5)
+  - maxStartups: Int (default: 1)
+  - storageLimit: Int | null
+  - features: String[]
+  - razorpayPlanId: String | null
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - planModules: PlanModule[]
+  - subscriptions: Subscription[]
+  - tenants: Tenant[]
+
+PlanModule (prisma model: PlanModule):
+  - id: String (cuid)
+  - planId: String (FK -> Plan)
+  - moduleId: String (FK -> Module)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - @@unique([planId, moduleId])
+
+Tenant (prisma model: Tenant):
+  - id: String (cuid)
+  - organizationName: String
+  - tenantKey: String (unique)
+  - domain: String | null
+  - status: TenantStatus — "ACTIVE" | "INACTIVE" | "SUSPENDED"
+  - planId: String | null (FK -> Plan, current active plan)
+  - tenantLogo: String | null
+  - pageId: String | null (unique, FK -> Page)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - subscriptions: Subscription[]
+  - invoices: Invoice[]
+  - billingHistory: BillingHistory[]
+  - userMemberships: IncubationUserTenant[]
+  - addonServiceRequests: AddonServiceRequest[]
+  - (many other relations omitted for brevity)
+
+Subscription (prisma model: Subscription):
+  - id: String (cuid)
+  - tenantId: String (FK -> Tenant)
+  - planId: String (FK -> Plan)
+  - razorpaySubscriptionId: String (unique)
+  - razorpayPaymentId: String | null
+  - razorpaySignature: String | null
+  - status: SubscriptionStatus — "PENDING" | "ACTIVE" | "COMPLETED" | "CANCELED" | "EXPIRED"
+  - startDate: DateTime | null
+  - endDate: DateTime | null (also serves as next billing date)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Invoice (prisma model: Invoice):
+  - id: String (cuid)
+  - tenantId: String (FK -> Tenant)
+  - invoiceNumber: String (unique, format: "INV-YEAR-HEXCODE")
+  - amount: Float
+  - issuedDate: DateTime (default: now())
+  - dueDate: DateTime | null
+  - paidDate: DateTime | null
+  - status: InvoiceStatus — "UNPAID" | "PAID" | "OVERDUE"
+  - pdfUrl: String | null
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - billingHistory: BillingHistory[]
+
+BillingHistory (prisma model: BillingHistory):
+  - id: String (cuid)
+  - tenantId: String (FK -> Tenant)
+  - amount: Float
+  - description: String | null
+  - billingDate: DateTime (default: now())
+  - paymentMethod: String | null ("Razorpay" | "SYSTEM_CREDIT")
+  - status: BillingStatus — "SUCCESS" | "FAILED" | "PENDING"
+  - invoiceId: String | null (FK -> Invoice)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Addon (prisma model: Addon):
+  - id: String (cuid)
+  - addonKey: String (unique)
+  - name: String
+  - description: String
+  - type: AddonType — "FIXED" | "CUSTOM"
+  - price: Float | null
+  - unit: String | null
+  - estimatedPrice: String | null
+  - icon: String | null
+  - isActive: Boolean (default: true)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - addonRequests: AddonServiceRequest[]
+
+AddonServiceRequest (prisma model: AddonServiceRequest):
+  - id: String (cuid)
+  - tenantId: String (FK -> Tenant)
+  - requestedById: String (FK -> IncubationUser)
+  - addonId: String (FK -> Addon)
+  - phone: String
+  - preferredDate: DateTime
+  - preferredTime: String
+  - message: String | null
+  - status: AddonRequestStatus — "PENDING" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "COMPLETED" | "CANCELLED"
+  - adminNotes: String | null
+  - reviewedBy: String | null
+  - reviewedAt: DateTime | null
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "status": 200,
+  "data": { ... },
+  "message": "Operation successful message"
+}
+
+Error Response:
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Error message"
+}
+
+================================================================================
+API QUICK REFERENCE — ALL ENDPOINTS
+================================================================================
+
+# A. AUTHENTICATION (/api/super-admin)
+| Endpoint       | Method | Auth     | Purpose                          |
+|----------------|--------|----------|----------------------------------|
+| /sign-up       | POST   | None     | Create a new super admin account |
+| /login         | POST   | None     | Login and get tokens             |
+| /logout        | GET    | Required | Logout (revoke refresh token)    |
+| /profile       | GET    | Required | Get current admin profile        |
+| /refresh       | GET    | Cookie   | Refresh access token             |
+
+# B. MODULE MANAGEMENT (/api/super-admin)
+| Endpoint              | Method | Auth     | Purpose                        |
+|-----------------------|--------|----------|--------------------------------|
+| /create-module        | POST   | Required | Create a new module            |
+| /get-modules          | GET    | Required | List all modules (paginated)   |
+| /update-module-status | PATCH  | Required | Enable/disable a module        |
+| /edit-module          | PATCH  | Required | Update module name/description |
+| /module-dropdown      | GET    | Required | Get active modules for dropdowns|
+
+# C. PLAN MANAGEMENT (/api/super-admin)
+| Endpoint              | Method | Auth     | Purpose                            |
+|-----------------------|--------|----------|------------------------------------|
+| /create-plan          | POST   | Required | Create a new subscription plan     |
+| /get-plans            | GET    | Required | List all plans with modules        |
+| /get-plans-by-type    | GET    | Required | Get plans grouped by type          |
+| /update-plan-modules  | PUT    | Required | Update modules included in a plan  |
+| /update-plan-details  | PUT    | Required | Update plan name, limits, features |
+
+# D. TENANT MANAGEMENT (/api/super-admin)
+| Endpoint                         | Method | Auth     | Purpose                        |
+|----------------------------------|--------|----------|--------------------------------|
+| /get-tenants                     | GET    | Required | List all tenants (paginated)   |
+| /get-tenant/:tenantId            | GET    | Required | Get full tenant details        |
+| /get-tenant/:tenantId/invoices   | GET    | Required | Get tenant's invoices          |
+
+# E. INVOICE MANAGEMENT (/api/super-admin)
+| Endpoint       | Method | Auth     | Purpose                            |
+|----------------|--------|----------|------------------------------------|
+| /get-invoice   | GET    | Required | List all invoices (all tenants)    |
+
+# F. ADDON MANAGEMENT (/api/super-admin)
+| Endpoint                  | Method | Auth     | Purpose                    |
+|---------------------------|--------|----------|----------------------------|
+| /create-addon             | POST   | Required | Create a new addon         |
+| /get-addons               | GET    | Required | List all addons (paginated)|
+| /get-addon/:addonId       | GET    | Required | Get addon details          |
+| /update-addon             | PUT    | Required | Update addon details       |
+| /toggle-addon-status      | PATCH  | Required | Enable/disable addon       |
+| /delete-addon/:addonId    | DELETE | Required | Delete an addon            |
+
+# G. ADDON REQUEST MANAGEMENT (/api/super-admin)
+| Endpoint                         | Method | Auth     | Purpose                      |
+|----------------------------------|--------|----------|------------------------------|
+| /addon-requests                  | GET    | Required | List all addon requests      |
+| /addon-requests/:requestId       | GET    | Required | Get addon request details    |
+| /addon-requests/update-status    | PATCH  | Required | Approve/reject addon request |
+
+# H. SUBSCRIPTION OVERSIGHT (/api/incubation — super admin also has access)
+| Endpoint                                  | Method | Auth     | Purpose                         |
+|-------------------------------------------|--------|----------|---------------------------------|
+| /subscriptions                            | GET    | Required | List ALL subscriptions          |
+| /subscription/tenant/:tenantId            | GET    | Required | Get tenant's subscription       |
+| /subscription/billing-info/:tenantId      | GET    | Required | Get tenant's billing info       |
+| /subscription/:subscriptionId/cancel      | POST   | Required | Cancel a subscription           |
+
+# I. CHAT MANAGEMENT (/api/super-admin)
+| Endpoint                      | Method | Auth     | Purpose                        |
+|-------------------------------|--------|----------|--------------------------------|
+| /chats                        | GET    | Required | List all chats                 |
+| /chats/search-tenants         | GET    | Required | Search tenant admins for chat  |
+| /chats/history/:tenantId      | GET    | Required | Get chat history with tenant   |
+
+
+================================================================================
+SECTION A — AUTHENTICATION
+================================================================================
+
+--------------------------------------------------------------------------------
+A1. SIGN UP (Create Super Admin)
+--------------------------------------------------------------------------------
+
+Method: POST
+URL: {{BASE_URL}}/api/super-admin/sign-up
+Auth: None
+
+Purpose: Register a new super admin account.
+
+Request Body:
+{
+  "email": "admin@example.com",
+  "name": "John Doe",
+  "role": "ADMIN",
+  "password": "SecurePassword123"
+}
+
+Field Validation:
+- email: Required, must be valid email format
+- name: Required, string
+- role: Required — "ADMIN" | "MARKETING" | "MANAGER" | "RELATIONSHIP_MANAGER"
+- password: Required, string (hashed with argon2 before storage)
+
+Response (201):
+{
+  "success": true,
+  "status": 201,
+  "data": {
+    "id": "cuid_admin_1",
+    "name": "John Doe",
+    "email": "admin@example.com",
+    "role": "ADMIN"
+  },
+  "message": "Super admin created successfully"
+}
+
+Error (400 — user exists):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "User already exist"
+}
+
+Error (400 — invalid email):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Email not valid."
+}
+
+Error (400 — missing fields):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": " Fields are required."
+}
+
+Frontend Notes:
+- Password is NOT returned in the response
+- After signup, redirect to login page
+- role determines dashboard access level
+
+--------------------------------------------------------------------------------
+A2. LOGIN
+--------------------------------------------------------------------------------
+
+Method: POST
+URL: {{BASE_URL}}/api/super-admin/login
+Auth: None
+
+Purpose: Authenticate super admin and receive JWT tokens.
+
+Request Body:
+{
+  "email": "admin@example.com",
+  "password": "SecurePassword123"
+}
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
+    "user": {
+      "id": "cuid_admin_1",
+      "name": "John Doe",
+      "email": "admin@example.com",
+      "role": "ADMIN"
+    }
+  },
+  "message": "Login successful"
+}
+
+Error (401):
+{
+  "success": false,
+  "status": 401,
+  "data": null,
+  "message": "Invalid email or password"
+}
+
+Frontend Notes:
+- Store accessToken in memory (short-lived, ~15 min)
+- Store refreshToken securely (used for refresh flow)
+- Send accessToken as: Authorization: Bearer <accessToken>
+- user.role determines which dashboard sections to show
+
+--------------------------------------------------------------------------------
+A3. LOGOUT
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/logout
+Auth: Bearer Token Required
+
+Purpose: Revoke the refresh token and log out the admin.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": null,
+  "message": "Logged out successfully"
+}
+
+Frontend Notes:
+- Clear stored tokens on the client side after this call
+- Redirect to login page
+
+--------------------------------------------------------------------------------
+A4. GET PROFILE
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/profile
+Auth: Bearer Token Required
+
+Purpose: Get the current logged-in admin's profile.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_admin_1",
+    "name": "John Doe",
+    "email": "admin@example.com",
+    "role": "ADMIN"
+  },
+  "message": "Profile fetched successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "User not found"
+}
+
+Frontend Notes:
+- Use this on app load to verify token validity and get user info
+- Display role badge in the header/sidebar
+
+--------------------------------------------------------------------------------
+A5. REFRESH TOKEN
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/refresh
+Auth: Cookie (refreshToken in httpOnly cookie)
+
+Purpose: Get a new access token using the refresh token stored in cookies.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIs...(new)",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIs...(new)",
+    "user": {
+      "id": "cuid_admin_1",
+      "name": "John Doe",
+      "email": "admin@example.com",
+      "role": "ADMIN"
+    }
+  }
+}
+
+Error (401):
+{
+  "success": false,
+  "status": 401,
+  "data": null,
+  "message": "Invalid or expired refresh token"
+}
+
+Frontend Notes:
+- Call this when accessToken expires (401 response from any API)
+- Server also sets new httpOnly cookies:
+    accessToken cookie: maxAge 15 minutes
+    refreshToken cookie: maxAge 7 days
+- Both returned in body AND set as cookies
+- If refresh fails, redirect to login
+
+
+================================================================================
+SECTION B — MODULE MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+B1. CREATE MODULE
+--------------------------------------------------------------------------------
+
+Method: POST
+URL: {{BASE_URL}}/api/super-admin/create-module
+Auth: Bearer Token Required
+
+Purpose: Create a new feature module with permissions. Modules are the
+building blocks that get assigned to plans.
+
+Request Body:
+{
+  "moduleName": "Analytics Dashboard",
+  "moduleKey": "analytics",
+  "moduleDescription": "Advanced analytics and reporting tools",
+  "permissions": ["C", "R", "U", "D", "F"]
+}
+
+Field Validation:
+- moduleName: Required, string (must be unique across modules)
+- moduleKey: Required, string (unique identifier, e.g., "analytics", "core")
+- moduleDescription: Required, string
+- permissions: Optional, string array
+    - If omitted or empty, defaults to: ["C", "R", "U", "D", "F"]
+    - C = Create, R = Read, U = Update, D = Delete, F = Full access
+
+Response (201):
+{
+  "success": true,
+  "status": 201,
+  "data": {
+    "id": "cuid_mod_1",
+    "moduleName": "Analytics Dashboard",
+    "moduleKey": "analytics",
+    "moduleDescription": "Advanced analytics and reporting tools",
+    "isActive": false,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T00:00:00Z",
+    "permissions": [
+      { "id": "cuid_perm_1", "action": "C", "moduleId": "cuid_mod_1" },
+      { "id": "cuid_perm_2", "action": "R", "moduleId": "cuid_mod_1" },
+      { "id": "cuid_perm_3", "action": "U", "moduleId": "cuid_mod_1" },
+      { "id": "cuid_perm_4", "action": "D", "moduleId": "cuid_mod_1" },
+      { "id": "cuid_perm_5", "action": "F", "moduleId": "cuid_mod_1" }
+    ]
+  },
+  "message": "5"
+}
+
+NOTE: The message field contains the createdPermissionsCount as a string
+(this is a known quirk — the count of created permissions is passed as
+the message parameter).
+
+Error (400 — duplicate key):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Module already exist"
+}
+
+Frontend Notes:
+- Newly created modules have isActive: false by default
+- Must activate via /update-module-status before they appear in dropdowns
+- moduleKey must be unique — use slugified name (e.g., "analytics-dashboard")
+
+--------------------------------------------------------------------------------
+B2. GET ALL MODULES
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-modules
+Auth: Bearer Token Required
+
+Purpose: List all modules with pagination, search, and stats.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- search (string, optional) — Searches moduleName, moduleKey, moduleDescription
+- searchFields (array, optional) — Override default search fields
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_mod_1",
+        "moduleName": "Analytics Dashboard",
+        "moduleKey": "analytics",
+        "moduleDescription": "Advanced analytics and reporting tools",
+        "isActive": true,
+        "createdAt": "2026-03-29T00:00:00Z",
+        "updatedAt": "2026-03-29T00:00:00Z"
+      },
+      {
+        "id": "cuid_mod_2",
+        "moduleName": "Core",
+        "moduleKey": "core",
+        "moduleDescription": "Core platform features",
+        "isActive": true,
+        "createdAt": "2026-03-28T00:00:00Z",
+        "updatedAt": "2026-03-28T00:00:00Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalPages": 1,
+      "totalCount": 2
+    },
+    "stats": {
+      "totalCount": 2,
+      "activeCount": 2,
+      "inactiveCount": 0
+    }
+  }
+}
+
+Frontend Notes:
+- stats.activeCount and stats.inactiveCount for dashboard summary cards
+- Use search for real-time filtering in the modules table
+- Note: permissions are NOT included in the list response (only in create)
+
+--------------------------------------------------------------------------------
+B3. UPDATE MODULE STATUS
+--------------------------------------------------------------------------------
+
+Method: PATCH
+URL: {{BASE_URL}}/api/super-admin/update-module-status
+Auth: Bearer Token Required
+
+Purpose: Enable or disable a module. Disabled modules are excluded from
+the module dropdown used when creating/editing plans.
+
+Request Body:
+{
+  "moduleId": "cuid_mod_1",
+  "isActive": true
+}
+
+Field Validation:
+- moduleId: Required, string
+- isActive: Required, boolean
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_mod_1",
+    "moduleName": "Analytics Dashboard",
+    "moduleKey": "analytics",
+    "moduleDescription": "Advanced analytics and reporting tools",
+    "isActive": true,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T00:00:00Z"
+  },
+  "message": "Module status updated successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Module not found"
+}
+
+Frontend Notes:
+- Toggle switch UI — sends isActive: true/false
+- Disabled modules still remain in existing plans but won't appear in
+  the module dropdown for new plan creation/editing
+
+--------------------------------------------------------------------------------
+B4. EDIT MODULE DETAILS
+--------------------------------------------------------------------------------
+
+Method: PATCH
+URL: {{BASE_URL}}/api/super-admin/edit-module
+Auth: Bearer Token Required
+
+Purpose: Update a module's name and description.
+
+Request Body:
+{
+  "moduleId": "cuid_mod_1",
+  "moduleName": "Analytics Pro",
+  "moduleDescription": "Premium analytics and reporting dashboard"
+}
+
+Field Validation:
+- moduleId: Required, string
+- moduleName: Required, string (must be unique — checked against other modules)
+- moduleDescription: Required, string
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_mod_1",
+    "moduleName": "Analytics Pro",
+    "moduleKey": "analytics",
+    "moduleDescription": "Premium analytics and reporting dashboard",
+    "isActive": true,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T10:00:00Z"
+  },
+  "message": "Module details updated successfully"
+}
+
+Error (400 — duplicate name):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Another module with this name already exists"
+}
+
+Frontend Notes:
+- moduleKey is NOT editable (only name and description can change)
+- Pre-fill form with current values
+
+--------------------------------------------------------------------------------
+B5. MODULE DROPDOWN
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/module-dropdown
+Auth: Bearer Token Required
+
+Purpose: Get a lightweight list of active modules for dropdown/select UI
+components (used in plan creation and editing forms).
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": [
+    { "id": "cuid_mod_1", "moduleName": "Analytics Pro" },
+    { "id": "cuid_mod_2", "moduleName": "Core" },
+    { "id": "cuid_mod_3", "moduleName": "Mentorship" }
+  ]
+}
+
+Frontend Notes:
+- Only returns active modules (isActive: true)
+- Sorted alphabetically by moduleName
+- Use id as the value and moduleName as the label in dropdowns
+- Call this when opening the plan creation/edit form
+
+
+================================================================================
+SECTION C — PLAN MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+C1. CREATE PLAN
+--------------------------------------------------------------------------------
+
+Method: POST
+URL: {{BASE_URL}}/api/super-admin/create-plan
+Auth: Bearer Token Required
+
+Purpose: Create a new subscription plan with modules, pricing, and limits.
+Also creates the corresponding plan on Razorpay for recurring billing.
+
+Request Body:
+{
+  "name": "Pro",
+  "price": 999,
+  "type": "MONTHLY",
+  "moduleIds": ["cuid_mod_1", "cuid_mod_2"],
+  "maxUsers": 20,
+  "maxStartups": 5,
+  "storageLimit": 10240,
+  "features": ["20 Users", "5 Startups", "Priority Support"]
+}
+
+Field Validation:
+- name: Required, string
+- price: Required, number (in INR)
+- type: Optional, string — "MONTHLY" | "YEARLY" | "WEEKLY" (default: "MONTHLY")
+- moduleIds: Optional, string array of module IDs (default: [])
+- maxUsers: Optional, number (default: 5)
+- maxStartups: Optional, number (default: 1)
+- storageLimit: Optional, number in MB (default: 1024)
+- features: Optional, string array (default: [])
+
+Response (201):
+{
+  "success": true,
+  "status": 201,
+  "data": {
+    "id": "cuid_plan_2",
+    "name": "Pro",
+    "price": 999,
+    "type": "MONTHLY",
+    "maxUsers": 20,
+    "maxStartups": 5,
+    "storageLimit": 10240,
+    "features": ["20 Users", "5 Startups", "Priority Support"],
+    "razorpayPlanId": "plan_rzp_abc123",
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T00:00:00Z",
+    "planModules": [
+      {
+        "id": "cuid_pm_1",
+        "planId": "cuid_plan_2",
+        "moduleId": "cuid_mod_1",
+        "module": {
+          "id": "cuid_mod_1",
+          "moduleName": "Core",
+          "moduleKey": "core",
+          "moduleDescription": "Core platform features",
+          "isActive": true
+        }
+      },
+      {
+        "id": "cuid_pm_2",
+        "planId": "cuid_plan_2",
+        "moduleId": "cuid_mod_2",
+        "module": {
+          "id": "cuid_mod_2",
+          "moduleName": "Analytics",
+          "moduleKey": "analytics",
+          "moduleDescription": "Analytics dashboard",
+          "isActive": true
+        }
+      }
+    ]
+  },
+  "message": "Plan created successfully with modules and limits"
+}
+
+Frontend Notes:
+- razorpayPlanId is auto-generated — do not send from frontend
+- Get moduleIds from the /module-dropdown endpoint
+- features array is displayed on the pricing page as bullet points
+- price is always in INR (Indian Rupees)
+- Razorpay plan is created in the background — if Razorpay fails,
+  the entire plan creation fails
+
+--------------------------------------------------------------------------------
+C2. GET ALL PLANS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-plans
+Auth: Bearer Token Required
+
+Purpose: List all plans with their modules and full details. No pagination
+— returns all plans sorted by newest first.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": [
+    {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "maxUsers": 20,
+      "maxStartups": 5,
+      "storageLimit": 10240,
+      "features": ["20 Users", "5 Startups", "Priority Support"],
+      "razorpayPlanId": "plan_rzp_abc123",
+      "createdAt": "2026-03-29T00:00:00Z",
+      "updatedAt": "2026-03-29T00:00:00Z",
+      "planModules": [
+        {
+          "module": {
+            "id": "cuid_mod_1",
+            "moduleName": "Core",
+            "moduleKey": "core",
+            "moduleDescription": "Core platform features",
+            "isActive": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "cuid_plan_1",
+      "name": "Basic",
+      "price": 499,
+      "type": "MONTHLY",
+      "maxUsers": 5,
+      "maxStartups": 1,
+      "storageLimit": 1024,
+      "features": ["5 Users", "1 Startup"],
+      "razorpayPlanId": "plan_rzp_basic",
+      "planModules": [...]
+    }
+  ],
+  "message": "Plans fetched successfully"
+}
+
+Frontend Notes:
+- Returns all plans (no pagination) — suitable for admin plan listing
+- Each plan includes full module details with isActive flag
+- planModules[].module contains the module info for display
+
+--------------------------------------------------------------------------------
+C3. GET PLANS BY TYPE
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-plans-by-type
+Auth: Bearer Token Required
+
+Purpose: Get all plans grouped by their billing type (MONTHLY vs YEARLY).
+Useful for pricing page tabs.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "monthlyPlans": [
+      {
+        "id": "cuid_plan_1",
+        "name": "Basic",
+        "price": 499,
+        "type": "MONTHLY",
+        "maxUsers": 5,
+        "maxStartups": 1,
+        "features": ["5 Users", "1 Startup"],
+        "planModules": [...]
+      },
+      {
+        "id": "cuid_plan_2",
+        "name": "Pro",
+        "price": 999,
+        "type": "MONTHLY",
+        "planModules": [...]
+      }
+    ],
+    "yearlyPlans": [
+      {
+        "id": "cuid_plan_3",
+        "name": "Basic Annual",
+        "price": 4999,
+        "type": "YEARLY",
+        "planModules": [...]
+      }
+    ]
+  },
+  "message": "Plans fetched and grouped by type successfully"
+}
+
+Frontend Notes:
+- WEEKLY plans are NOT included in the grouping (only MONTHLY and YEARLY)
+- Use this for "Monthly | Yearly" tab switches on the pricing page
+- Each group is sorted by createdAt desc
+
+--------------------------------------------------------------------------------
+C4. UPDATE PLAN MODULES
+--------------------------------------------------------------------------------
+
+Method: PUT
+URL: {{BASE_URL}}/api/super-admin/update-plan-modules
+Auth: Bearer Token Required
+
+Purpose: Replace all modules in a plan with a new set. This is a full
+replacement — all existing plan-module associations are deleted and
+recreated with the new moduleIds.
+
+Request Body:
+{
+  "planId": "cuid_plan_2",
+  "moduleIds": ["cuid_mod_1", "cuid_mod_2", "cuid_mod_3"]
+}
+
+Field Validation:
+- planId: Required, string
+- moduleIds: Required, string array
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_plan_2",
+    "name": "Pro",
+    "price": 999,
+    "type": "MONTHLY",
+    "maxUsers": 20,
+    "maxStartups": 5,
+    "storageLimit": 10240,
+    "features": ["20 Users", "5 Startups", "Priority Support"],
+    "razorpayPlanId": "plan_rzp_abc123",
+    "planModules": [
+      { "module": { "id": "cuid_mod_1", "moduleName": "Core", ... } },
+      { "module": { "id": "cuid_mod_2", "moduleName": "Analytics", ... } },
+      { "module": { "id": "cuid_mod_3", "moduleName": "Advanced", ... } }
+    ]
+  },
+  "message": "Plan modules updated successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Plan not found"
+}
+
+Frontend Notes:
+- This is a FULL REPLACEMENT — send ALL desired moduleIds, not just additions
+- To remove a module, send moduleIds without it
+- Pre-populate the multi-select with current plan modules
+
+--------------------------------------------------------------------------------
+C5. UPDATE PLAN DETAILS
+--------------------------------------------------------------------------------
+
+Method: PUT
+URL: {{BASE_URL}}/api/super-admin/update-plan-details
+Auth: Bearer Token Required
+
+Purpose: Update plan metadata (name, user/startup limits, storage, features).
+Does NOT update price or type (those are tied to Razorpay plan).
+
+Request Body:
+{
+  "planId": "cuid_plan_2",
+  "name": "Pro Plus",
+  "maxUsers": 30,
+  "maxStartups": 10,
+  "storageLimit": 20480,
+  "featuresInArray": "[\"30 Users\", \"10 Startups\", \"Premium Support\"]"
+}
+
+Field Validation:
+- planId: Required, string
+- name: Optional, string
+- maxUsers: Optional, number
+- maxStartups: Optional, number
+- storageLimit: Optional, number
+- featuresInArray: Optional, JSON-stringified array of strings
+  IMPORTANT: This must be a JSON string, NOT an array. The backend
+  calls JSON.parse(featuresInArray) to convert it.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_plan_2",
+    "name": "Pro Plus",
+    "price": 999,
+    "type": "MONTHLY",
+    "maxUsers": 30,
+    "maxStartups": 10,
+    "storageLimit": 20480,
+    "features": ["30 Users", "10 Startups", "Premium Support"],
+    "razorpayPlanId": "plan_rzp_abc123",
+    "planModules": [...]
+  },
+  "message": "Plan details updated successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Plan not found"
+}
+
+Frontend Notes:
+- Only send fields that need updating (partial update supported)
+- featuresInArray must be JSON.stringify'd on the frontend:
+    featuresInArray: JSON.stringify(["30 Users", "10 Startups"])
+- price and type CANNOT be changed (tied to Razorpay plan)
+- To change price/type, create a new plan instead
+
+
+================================================================================
+SECTION D — TENANT MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+D1. GET ALL TENANTS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-tenants
+Auth: Bearer Token Required
+
+Purpose: List all tenants with subscription info, billing history, users,
+invoices, and enriched data (current status, next billing date, total users).
+This is the main super admin dashboard view.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- search (string, optional) — Searches organizationName, domain
+- sortBy (string, default: "createdAt")
+- order (string, default: "desc") — "asc" | "desc"
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_tenant_123",
+        "organizationName": "Innovation Hub",
+        "tenantKey": "innovation-hub",
+        "domain": "innovationhub.com",
+        "status": "ACTIVE",
+        "planId": "cuid_plan_2",
+        "tenantLogo": "https://s3.../logo.png",
+        "createdAt": "2026-01-15T00:00:00Z",
+        "plan": {
+          "id": "cuid_plan_2",
+          "name": "Pro",
+          "price": 999,
+          "type": "MONTHLY"
+        },
+        "subscriptions": [
+          {
+            "id": "cuid_sub_1",
+            "status": "ACTIVE",
+            "startDate": "2026-03-01T00:00:00Z",
+            "endDate": "2026-04-01T00:00:00Z",
+            "plan": { "id": "cuid_plan_2", "name": "Pro", "price": 999, "type": "MONTHLY" }
+          }
+        ],
+        "billingHistory": [
+          {
+            "id": "cuid_bh_1",
+            "amount": 999,
+            "description": "Subscription payment for Pro",
+            "status": "SUCCESS",
+            "invoice": { ... }
+          }
+        ],
+        "userMemberships": [
+          {
+            "id": "cuid_membership_1",
+            "isAdmin": true,
+            "incubationUser": {
+              "id": "cuid_user_1",
+              "name": "John Smith",
+              "email": "john@innovationhub.com",
+              "imageUrl": "https://s3.../avatar.png"
+            }
+          }
+        ],
+        "invoices": [
+          {
+            "id": "cuid_inv_1",
+            "invoiceNumber": "INV-2026-A1B2C3D4",
+            "amount": 999,
+            "status": "PAID"
+          }
+        ],
+        "totalUsers": 12,
+        "currentSubscriptionStatus": "ACTIVE",
+        "currentPlan": { "id": "cuid_plan_2", "name": "Pro", "price": 999, "type": "MONTHLY" },
+        "nextBillingDate": "2026-04-01T00:00:00Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalCount": 45,
+      "totalPages": 5
+    }
+  },
+  "message": "Tenants fetched successfully"
+}
+
+Frontend Notes:
+- Enriched fields (computed, not from DB directly):
+    - totalUsers: count of active userMemberships
+    - currentSubscriptionStatus: "ACTIVE" | "INACTIVE" (from first ACTIVE sub)
+    - currentPlan: plan from active subscription, or tenant.plan fallback
+    - nextBillingDate: endDate from active subscription
+- billingHistory includes last 5 records
+- invoices includes last 5 records
+- userMemberships shows only active members with their admin flag
+- Use search to filter by organization name or domain
+
+--------------------------------------------------------------------------------
+D2. GET TENANT DETAILS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-tenant/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get complete 360-degree view of a single tenant including all
+subscriptions, invoices, billing history, and user memberships.
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_tenant_123",
+    "organizationName": "Innovation Hub",
+    "tenantKey": "innovation-hub",
+    "domain": "innovationhub.com",
+    "status": "ACTIVE",
+    "planId": "cuid_plan_2",
+    "tenantLogo": "https://s3.../logo.png",
+    "pageId": "cuid_page_1",
+    "plan": {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "planModules": [
+        { "module": { "id": "cuid_mod_1", "moduleName": "Core", ... } }
+      ]
+    },
+    "subscriptions": [
+      {
+        "id": "cuid_sub_1",
+        "tenantId": "cuid_tenant_123",
+        "planId": "cuid_plan_2",
+        "razorpaySubscriptionId": "sub_rzp_abc123",
+        "status": "ACTIVE",
+        "startDate": "2026-03-01T00:00:00Z",
+        "endDate": "2026-04-01T00:00:00Z",
+        "plan": { "id": "cuid_plan_2", "name": "Pro", "price": 999, "type": "MONTHLY" }
+      },
+      {
+        "id": "cuid_sub_0",
+        "status": "COMPLETED",
+        "plan": { "name": "Basic", "price": 499 }
+      }
+    ],
+    "invoices": [
+      {
+        "id": "cuid_inv_1",
+        "invoiceNumber": "INV-2026-A1B2C3D4",
+        "amount": 999,
+        "issuedDate": "2026-03-01T00:00:00Z",
+        "paidDate": "2026-03-01T00:00:00Z",
+        "status": "PAID",
+        "billingHistory": [
+          {
+            "id": "cuid_bh_1",
+            "amount": 999,
+            "paymentMethod": "Razorpay",
+            "status": "SUCCESS"
+          }
+        ]
+      }
+    ],
+    "billingHistory": [
+      {
+        "id": "cuid_bh_1",
+        "amount": 999,
+        "description": "Subscription payment for Pro [pay_abc123]",
+        "billingDate": "2026-03-01T00:00:00Z",
+        "paymentMethod": "Razorpay",
+        "status": "SUCCESS",
+        "invoice": {
+          "id": "cuid_inv_1",
+          "invoiceNumber": "INV-2026-A1B2C3D4",
+          "status": "PAID"
+        }
+      }
+    ],
+    "userMemberships": [
+      {
+        "incubationUser": {
+          "id": "cuid_user_1",
+          "name": "John Smith",
+          "email": "john@innovationhub.com",
+          "imageUrl": "https://s3.../avatar.png"
+        },
+        "isAdmin": true,
+        "role": { "id": "cuid_role_1", "roleName": "Admin" }
+      },
+      {
+        "incubationUser": {
+          "id": "cuid_user_2",
+          "name": "Jane Doe",
+          "email": "jane@innovationhub.com",
+          "imageUrl": null
+        },
+        "isAdmin": false,
+        "role": { "id": "cuid_role_2", "roleName": "Manager" }
+      }
+    ],
+    "totalUsers": 2,
+    "currentSubscriptionStatus": "ACTIVE",
+    "currentPlan": { "id": "cuid_plan_2", "name": "Pro", "price": 999, "type": "MONTHLY" },
+    "nextBillingDate": "2026-04-01T00:00:00Z"
+  },
+  "message": "Tenant fetched successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Tenant not found"
+}
+
+Frontend Notes:
+- subscriptions array shows ALL subscriptions (active, canceled, expired, completed)
+- invoices include nested billingHistory for cross-referencing
+- billingHistory includes nested invoice for reverse lookup
+- userMemberships shows only active members with role info
+- Enriched fields: totalUsers, currentSubscriptionStatus, currentPlan, nextBillingDate
+- paymentMethod "SYSTEM_CREDIT" in billingHistory indicates proration credit
+
+--------------------------------------------------------------------------------
+D3. GET TENANT INVOICES
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-tenant/:tenantId/invoices
+Auth: Bearer Token Required
+
+Purpose: Get paginated invoices for a specific tenant with billing history details.
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status (string, optional) — "PAID" | "UNPAID" | "OVERDUE"
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_inv_1",
+        "tenantId": "cuid_tenant_123",
+        "invoiceNumber": "INV-2026-A1B2C3D4",
+        "amount": 999,
+        "issuedDate": "2026-03-01T00:00:00Z",
+        "dueDate": null,
+        "paidDate": "2026-03-01T00:00:00Z",
+        "status": "PAID",
+        "pdfUrl": null,
+        "billingHistory": [
+          {
+            "id": "cuid_bh_1",
+            "amount": 999,
+            "billingDate": "2026-03-01T00:00:00Z",
+            "description": "Subscription payment for Pro",
+            "status": "SUCCESS",
+            "paymentMethod": "Razorpay"
+          }
+        ]
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalCount": 5,
+      "totalPages": 1
+    }
+  },
+  "message": "Tenant invoices fetched successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Tenant not found"
+}
+
+Frontend Notes:
+- Filter by status for quick views (e.g., "Show unpaid invoices")
+- Each invoice includes its related billingHistory entries
+- billingHistory shows payment method and individual transaction status
+
+
+================================================================================
+SECTION E — INVOICE MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+E1. GET ALL INVOICES
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-invoice
+Auth: Bearer Token Required
+
+Purpose: List all invoices across ALL tenants with filtering, search,
+and summary stats.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- search (string, optional) — Searches invoiceNumber, organizationName, tenantKey
+- status (string, optional) — "PAID" | "UNPAID" | "OVERDUE"
+- sortBy (string, default: "createdAt")
+- order (string, default: "desc") — "asc" | "desc"
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_inv_1",
+        "tenantId": "cuid_tenant_123",
+        "invoiceNumber": "INV-2026-A1B2C3D4",
+        "amount": 999,
+        "issuedDate": "2026-03-01T00:00:00Z",
+        "dueDate": null,
+        "paidDate": "2026-03-01T00:00:00Z",
+        "status": "PAID",
+        "pdfUrl": null,
+        "createdAt": "2026-03-01T00:00:00Z",
+        "updatedAt": "2026-03-01T00:00:00Z",
+        "tenant": {
+          "id": "cuid_tenant_123",
+          "organizationName": "Innovation Hub",
+          "tenantKey": "innovation-hub"
+        },
+        "billingHistory": [
+          {
+            "id": "cuid_bh_1",
+            "amount": 999,
+            "billingDate": "2026-03-01T00:00:00Z",
+            "description": "Subscription payment for Pro",
+            "status": "SUCCESS",
+            "paymentMethod": "Razorpay"
+          }
+        ]
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalPages": 12,
+      "totalCount": 120
+    },
+    "stats": {
+      "totalCount": 120,
+      "paidCount": 115,
+      "unpaidCount": 5
+    }
+  },
+  "message": "Invoices fetched successfully"
+}
+
+Frontend Notes:
+- stats.paidCount and stats.unpaidCount for dashboard summary cards
+- Search works on invoice number, organization name, and tenantKey
+- Status filter for quick views (e.g., "Show unpaid invoices only")
+- Each invoice includes the tenant details for display
+- billingHistory shows actual payment transactions for each invoice
+
+
+================================================================================
+SECTION F — ADDON MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+F1. CREATE ADDON
+--------------------------------------------------------------------------------
+
+Method: POST
+URL: {{BASE_URL}}/api/super-admin/create-addon
+Auth: Bearer Token Required
+
+Purpose: Create a new addon service that tenants can request.
+
+Request Body:
+{
+  "addonKey": "domain-setup",
+  "name": "Custom Domain Setup",
+  "description": "Setup and configure a custom domain for the incubation portal",
+  "type": "FIXED",
+  "price": 2999,
+  "unit": "per domain",
+  "estimatedPrice": null,
+  "icon": "globe"
+}
+
+Field Validation:
+- addonKey: Required, string (unique identifier, e.g., "domain-setup")
+- name: Required, string
+- description: Required, string
+- type: Required — "FIXED" | "CUSTOM"
+    - FIXED: has a set price
+    - CUSTOM: price determined per request (use estimatedPrice for guidance)
+- price: Optional, number (for FIXED type addons)
+- unit: Optional, string (e.g., "per domain", "per user", "per month")
+- estimatedPrice: Optional, string (e.g., "Starting from INR 5000" for CUSTOM)
+- icon: Optional, string (icon name for frontend display)
+
+Response (201):
+{
+  "success": true,
+  "status": 201,
+  "data": {
+    "id": "cuid_addon_1",
+    "addonKey": "domain-setup",
+    "name": "Custom Domain Setup",
+    "description": "Setup and configure a custom domain for the incubation portal",
+    "type": "FIXED",
+    "price": 2999,
+    "unit": "per domain",
+    "estimatedPrice": null,
+    "icon": "globe",
+    "isActive": true,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T00:00:00Z"
+  },
+  "message": "Addon created successfully"
+}
+
+Error (409 — duplicate key):
+{
+  "success": false,
+  "status": 409,
+  "data": null,
+  "message": "Addon with this key already exists"
+}
+
+Frontend Notes:
+- addonKey must be unique — use slugified name
+- Newly created addons are isActive: true by default
+- For CUSTOM type, set price to null and use estimatedPrice for guidance text
+
+--------------------------------------------------------------------------------
+F2. GET ALL ADDONS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-addons
+Auth: Bearer Token Required
+
+Purpose: List all addons with pagination, search, and request counts.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- search (string, optional) — Searches name, description
+- sortBy (string, default: "createdAt")
+- order (string, default: "desc")
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_addon_1",
+        "addonKey": "domain-setup",
+        "name": "Custom Domain Setup",
+        "description": "Setup and configure a custom domain",
+        "type": "FIXED",
+        "price": 2999,
+        "unit": "per domain",
+        "estimatedPrice": null,
+        "icon": "globe",
+        "isActive": true,
+        "createdAt": "2026-03-29T00:00:00Z",
+        "updatedAt": "2026-03-29T00:00:00Z",
+        "_count": {
+          "addonRequests": 15
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalCount": 8,
+      "totalPages": 1
+    }
+  },
+  "message": "Addons fetched successfully"
+}
+
+Frontend Notes:
+- _count.addonRequests shows how many times this addon has been requested
+- Use this count to show popularity or demand metrics
+
+--------------------------------------------------------------------------------
+F3. GET ADDON BY ID
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/get-addon/:addonId
+Auth: Bearer Token Required
+
+Purpose: Get detailed information about a specific addon.
+
+Path Parameters:
+- addonId (string, REQUIRED)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_addon_1",
+    "addonKey": "domain-setup",
+    "name": "Custom Domain Setup",
+    "description": "Setup and configure a custom domain",
+    "type": "FIXED",
+    "price": 2999,
+    "unit": "per domain",
+    "estimatedPrice": null,
+    "icon": "globe",
+    "isActive": true,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T00:00:00Z",
+    "_count": {
+      "addonRequests": 15
+    }
+  },
+  "message": "Addon fetched successfully"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Addon not found"
+}
+
+--------------------------------------------------------------------------------
+F4. UPDATE ADDON
+--------------------------------------------------------------------------------
+
+Method: PUT
+URL: {{BASE_URL}}/api/super-admin/update-addon
+Auth: Bearer Token Required
+
+Purpose: Update addon details. Supports partial updates — only send
+fields that need changing.
+
+Request Body:
+{
+  "addonId": "cuid_addon_1",
+  "name": "Premium Domain Setup",
+  "description": "Full domain configuration with SSL and DNS management",
+  "price": 3999
+}
+
+Field Validation:
+- addonId: Required, string (sent in body, not URL)
+- All other fields optional: addonKey, name, description, type, price,
+  unit, estimatedPrice, icon
+- If addonKey is changed, uniqueness is verified
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_addon_1",
+    "addonKey": "domain-setup",
+    "name": "Premium Domain Setup",
+    "description": "Full domain configuration with SSL and DNS management",
+    "type": "FIXED",
+    "price": 3999,
+    "unit": "per domain",
+    "estimatedPrice": null,
+    "icon": "globe",
+    "isActive": true,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T10:00:00Z"
+  },
+  "message": "Addon updated successfully"
+}
+
+Error (409 — duplicate key):
+{
+  "success": false,
+  "status": 409,
+  "data": null,
+  "message": "Another addon with this key already exists"
+}
+
+Frontend Notes:
+- addonId is sent in the request body, NOT as a URL parameter
+- Only send changed fields — backend applies partial update
+
+--------------------------------------------------------------------------------
+F5. TOGGLE ADDON STATUS
+--------------------------------------------------------------------------------
+
+Method: PATCH
+URL: {{BASE_URL}}/api/super-admin/toggle-addon-status
+Auth: Bearer Token Required
+
+Purpose: Enable or disable an addon. Disabled addons are not shown to
+tenants in the addon marketplace.
+
+Request Body:
+{
+  "addonId": "cuid_addon_1",
+  "isActive": false
+}
+
+Field Validation:
+- addonId: Required, string
+- isActive: Required, boolean
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_addon_1",
+    "addonKey": "domain-setup",
+    "name": "Custom Domain Setup",
+    "isActive": false,
+    ...
+  },
+  "message": "Addon status updated successfully"
+}
+
+Frontend Notes:
+- Toggle switch UI — sends isActive: true/false
+
+--------------------------------------------------------------------------------
+F6. DELETE ADDON
+--------------------------------------------------------------------------------
+
+Method: DELETE
+URL: {{BASE_URL}}/api/super-admin/delete-addon/:addonId
+Auth: Bearer Token Required
+
+Purpose: Permanently delete an addon. Only allowed if no requests exist
+for this addon.
+
+Path Parameters:
+- addonId (string, REQUIRED)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "message": "Addon deleted successfully"
+  },
+  "message": "Addon deleted successfully"
+}
+
+Error (400 — has requests):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Cannot delete addon with existing requests. Deactivate it instead."
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Addon not found"
+}
+
+Frontend Notes:
+- Show confirmation dialog before deleting
+- If deletion fails due to existing requests, suggest using toggle-addon-status
+  to deactivate instead
+- This is a hard delete — the addon is permanently removed
+
+
+================================================================================
+SECTION G — ADDON REQUEST MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+G1. GET ALL ADDON REQUESTS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/addon-requests
+Auth: Bearer Token Required
+
+Purpose: List all addon service requests from tenants with filtering and search.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- search (string, optional) — Searches addon name, organization name, requester name
+- status (string, optional) — "PENDING" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "COMPLETED" | "CANCELLED"
+- sortBy (string, default: "createdAt")
+- order (string, default: "desc")
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_req_1",
+        "tenantId": "cuid_tenant_123",
+        "requestedById": "cuid_user_1",
+        "addonId": "cuid_addon_1",
+        "phone": "+91-9876543210",
+        "preferredDate": "2026-04-05T00:00:00Z",
+        "preferredTime": "10:00 AM - 12:00 PM",
+        "message": "We need this setup for our new portal domain",
+        "status": "PENDING",
+        "adminNotes": null,
+        "reviewedBy": null,
+        "reviewedAt": null,
+        "createdAt": "2026-03-29T00:00:00Z",
+        "updatedAt": "2026-03-29T00:00:00Z",
+        "tenant": {
+          "id": "cuid_tenant_123",
+          "organizationName": "Innovation Hub",
+          "tenantLogo": "https://s3.../logo.png"
+        },
+        "requestedBy": {
+          "id": "cuid_user_1",
+          "name": "John Smith",
+          "email": "john@innovationhub.com",
+          "imageUrl": "https://s3.../avatar.png"
+        },
+        "addon": {
+          "id": "cuid_addon_1",
+          "addonKey": "domain-setup",
+          "name": "Custom Domain Setup",
+          "type": "FIXED",
+          "price": 2999,
+          "icon": "globe"
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalCount": 25,
+      "totalPages": 3
+    }
+  },
+  "message": "Addon requests fetched successfully"
+}
+
+Frontend Notes:
+- Filter by status for workflow management (e.g., "Show pending requests")
+- Each request shows tenant, requester, and addon details inline
+- preferredDate and preferredTime show when the tenant wants the service
+
+--------------------------------------------------------------------------------
+G2. GET ADDON REQUEST DETAILS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/addon-requests/:requestId
+Auth: Bearer Token Required
+
+Purpose: Get detailed information about a specific addon request.
+
+Path Parameters:
+- requestId (string, REQUIRED)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_req_1",
+    "tenantId": "cuid_tenant_123",
+    "requestedById": "cuid_user_1",
+    "addonId": "cuid_addon_1",
+    "phone": "+91-9876543210",
+    "preferredDate": "2026-04-05T00:00:00Z",
+    "preferredTime": "10:00 AM - 12:00 PM",
+    "message": "We need this setup for our new portal domain",
+    "status": "PENDING",
+    "adminNotes": null,
+    "reviewedBy": null,
+    "reviewedAt": null,
+    "createdAt": "2026-03-29T00:00:00Z",
+    "updatedAt": "2026-03-29T00:00:00Z",
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "organizationName": "Innovation Hub",
+      "tenantLogo": "https://s3.../logo.png",
+      "domain": "innovationhub.com"
+    },
+    "requestedBy": {
+      "id": "cuid_user_1",
+      "name": "John Smith",
+      "email": "john@innovationhub.com",
+      "imageUrl": "https://s3.../avatar.png"
+    },
+    "addon": {
+      "id": "cuid_addon_1",
+      "addonKey": "domain-setup",
+      "name": "Custom Domain Setup",
+      "description": "Setup and configure a custom domain",
+      "type": "FIXED",
+      "price": 2999,
+      "unit": "per domain",
+      "estimatedPrice": null,
+      "icon": "globe",
+      "isActive": true,
+      "createdAt": "2026-03-29T00:00:00Z",
+      "updatedAt": "2026-03-29T00:00:00Z"
+    }
+  },
+  "message": "Addon request details fetched"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Addon request not found"
+}
+
+Frontend Notes:
+- Full addon details included (not just summary like in the list)
+- tenant.domain included here (not in list view)
+- Use this for the request detail/review page
+
+--------------------------------------------------------------------------------
+G3. UPDATE ADDON REQUEST STATUS
+--------------------------------------------------------------------------------
+
+Method: PATCH
+URL: {{BASE_URL}}/api/super-admin/addon-requests/update-status
+Auth: Bearer Token Required
+
+Purpose: Change the status of an addon request (approve, reject, complete, etc.).
+An email notification is automatically sent to the requester.
+
+Request Body:
+{
+  "requestId": "cuid_req_1",
+  "status": "APPROVED",
+  "adminNotes": "Domain setup will be completed by April 5th."
+}
+
+Field Validation:
+- requestId: Required, string
+- status: Required — "PENDING" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "COMPLETED" | "CANCELLED"
+- adminNotes: Optional, string (visible to the tenant after update)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_req_1",
+    "tenantId": "cuid_tenant_123",
+    "requestedById": "cuid_user_1",
+    "addonId": "cuid_addon_1",
+    "phone": "+91-9876543210",
+    "preferredDate": "2026-04-05T00:00:00Z",
+    "preferredTime": "10:00 AM - 12:00 PM",
+    "message": "We need this setup for our new portal domain",
+    "status": "APPROVED",
+    "adminNotes": "Domain setup will be completed by April 5th.",
+    "reviewedBy": "cuid_admin_1",
+    "reviewedAt": "2026-03-29T10:00:00Z",
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "organizationName": "Innovation Hub"
+    },
+    "requestedBy": {
+      "id": "cuid_user_1",
+      "name": "John Smith",
+      "email": "john@innovationhub.com"
+    },
+    "addon": {
+      "id": "cuid_addon_1",
+      "name": "Custom Domain Setup",
+      "type": "FIXED"
+    }
+  },
+  "message": "Addon request status updated"
+}
+
+Error (404):
+{
+  "success": false,
+  "status": 404,
+  "data": null,
+  "message": "Addon request not found"
+}
+
+Frontend Notes:
+- reviewedBy is set automatically from the logged-in admin's ID
+- reviewedAt is set automatically to the current timestamp
+- Email is sent to requestedBy.email with status update and admin notes
+  (template: src/mails/addon-request-status-update.ejs)
+- Status workflow: PENDING -> IN_REVIEW -> APPROVED/REJECTED -> COMPLETED
+  (CANCELLED can be set at any stage)
+
+
+================================================================================
+SECTION H — SUBSCRIPTION OVERSIGHT
+================================================================================
+
+These endpoints are under /api/incubation and are shared with the tenant
+subscription system. Super admin can use them to view and manage all
+subscriptions across all tenants.
+
+--------------------------------------------------------------------------------
+H1. GET ALL SUBSCRIPTIONS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation/subscriptions
+Auth: Bearer Token Required
+
+Purpose: List ALL subscriptions across all tenants with pagination,
+filtering by status, and search.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status (string, optional) — "ACTIVE" | "PENDING" | "CANCELED" | "COMPLETED" | "EXPIRED"
+- search (string, optional) — Searches by org name or plan name
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [
+      {
+        "id": "cuid_sub_1",
+        "tenantId": "cuid_tenant_123",
+        "planId": "cuid_plan_2",
+        "razorpaySubscriptionId": "sub_rzp_abc123",
+        "status": "ACTIVE",
+        "startDate": "2026-03-01T00:00:00Z",
+        "endDate": "2026-04-01T00:00:00Z",
+        "createdAt": "2026-03-01T00:00:00Z",
+        "plan": {
+          "name": "Pro",
+          "price": 999,
+          "type": "MONTHLY"
+        },
+        "tenant": {
+          "organizationName": "Innovation Hub",
+          "tenantKey": "innovation-hub",
+          "status": "ACTIVE"
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "totalPages": 5,
+      "totalCount": 45
+    }
+  },
+  "message": "Subscriptions fetched successfully"
+}
+
+Frontend Notes:
+- Use status filter for dashboard views (e.g., "Active subscriptions only")
+- Shows tenant + plan details inline for quick overview
+- endDate is the next billing date for active subscriptions
+
+--------------------------------------------------------------------------------
+H2. GET SUBSCRIPTION BY TENANT
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation/subscription/tenant/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get the most recent subscription for a specific tenant with full
+plan details. If subscription is ACTIVE, also fetches live Razorpay details.
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Response (200 — active subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_sub_1",
+    "tenantId": "cuid_tenant_123",
+    "planId": "cuid_plan_2",
+    "razorpaySubscriptionId": "sub_rzp_abc123",
+    "status": "ACTIVE",
+    "startDate": "2026-03-01T00:00:00Z",
+    "endDate": "2026-04-01T00:00:00Z",
+    "plan": {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "planModules": [...]
+    },
+    "tenant": { ... },
+    "razorpayDetails": {
+      "id": "sub_rzp_abc123",
+      "status": "active",
+      "remaining_count": 11,
+      "paid_count": 1,
+      "total_count": 12,
+      "current_start": 1711929600,
+      "current_end": 1714521600
+    }
+  },
+  "message": "Subscription fetched successfully"
+}
+
+Response (200 — no subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": null,
+  "message": "Subscription fetched successfully"
+}
+
+Frontend Notes:
+- data: null means tenant has never subscribed
+- razorpayDetails only present for ACTIVE subscriptions
+- Use remaining_count to show "X renewals remaining"
+- current_start/current_end are Unix timestamps from Razorpay
+
+--------------------------------------------------------------------------------
+H3. GET BILLING INFO BY TENANT
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/incubation/subscription/billing-info/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get detailed billing cycle info for a tenant. Shows next billing
+date, days until renewal, payment status, and recent billing history.
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Response (200 — active subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "tenant": {
+      "id": "cuid_tenant_123",
+      "organizationName": "Innovation Hub",
+      "status": "ACTIVE"
+    },
+    "subscription": {
+      "id": "cuid_sub_1",
+      "status": "ACTIVE",
+      "startDate": "2026-03-01T00:00:00Z",
+      "endDate": "2026-04-01T00:00:00Z",
+      "razorpaySubscriptionId": "sub_rzp_abc123"
+    },
+    "plan": {
+      "id": "cuid_plan_2",
+      "name": "Pro",
+      "price": 999,
+      "type": "MONTHLY",
+      "features": ["20 Users", "5 Startups"],
+      "modules": [
+        { "id": "cuid_mod_1", "name": "Core" },
+        { "id": "cuid_mod_2", "name": "Analytics" }
+      ]
+    },
+    "billing": {
+      "nextBillingDate": "2026-04-01T00:00:00Z",
+      "daysUntilNextBilling": 3,
+      "currentCycleStart": "2026-03-01T00:00:00Z",
+      "currentCycleEnd": "2026-04-01T00:00:00Z",
+      "remainingCount": 11,
+      "paidCount": 1,
+      "totalCount": 12,
+      "isPaymentDue": false,
+      "pendingAmount": null,
+      "paymentDueReason": null,
+      "isRenewalApproaching": true,
+      "renewalReminderText": "Your plan renews in 3 days"
+    },
+    "recentBillingHistory": [
+      {
+        "id": "cuid_bh_1",
+        "amount": 999,
+        "description": "Subscription payment for Pro",
+        "paymentMethod": "Razorpay",
+        "status": "SUCCESS",
+        "billingDate": "2026-03-01T00:00:00Z",
+        "invoice": {
+          "id": "cuid_inv_1",
+          "invoiceNumber": "INV-2026-A1B2C3D4",
+          "status": "PAID"
+        }
+      }
+    ]
+  },
+  "message": "Billing info fetched successfully"
+}
+
+Response (200 — no subscription):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "tenant": { ... },
+    "subscription": null,
+    "billing": null
+  },
+  "message": "Billing info fetched successfully"
+}
+
+Frontend Notes:
+- billing.nextBillingDate — show this prominently
+- billing.daysUntilNextBilling — for countdown display
+- billing: null means no active subscription
+- Payment Status Fields:
+    - isPaymentDue: true → show alert
+    - pendingAmount: amount owed
+    - paymentDueReason: "Overdue invoice" | "Unpaid invoice" |
+      "Subscription halted" | "Subscription paused" | "Billing cycle expired"
+    - isRenewalApproaching: true → show soft reminder
+    - renewalReminderText: human-readable reminder text
+
+--------------------------------------------------------------------------------
+H4. CANCEL SUBSCRIPTION
+--------------------------------------------------------------------------------
+
+Method: POST
+URL: {{BASE_URL}}/api/incubation/subscription/:subscriptionId/cancel
+Auth: Bearer Token Required
+
+Purpose: Cancel a subscription. Can cancel at end of current cycle or
+immediately.
+
+Path Parameters:
+- subscriptionId (string, REQUIRED)
+
+Request Body:
+{
+  "cancelAtCycleEnd": true
+}
+
+- cancelAtCycleEnd: true → Service continues until endDate, then expires
+- cancelAtCycleEnd: false → Service stops immediately, tenant SUSPENDED
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "id": "cuid_sub_1",
+    "status": "CANCELED",
+    "endDate": "2026-04-01T00:00:00Z",
+    "plan": { ... },
+    "tenant": { ... }
+  },
+  "message": "Subscription cancelled successfully"
+}
+
+Frontend Notes:
+- Show confirmation dialog with cancel options
+- cancelAtCycleEnd: true — tenant keeps access until endDate
+- cancelAtCycleEnd: false — tenant loses access immediately, status -> SUSPENDED
+
+
+================================================================================
+SECTION I — CHAT MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+I1. GET ALL CHATS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/chats
+Auth: Bearer Token Required
+
+Purpose: List all chat conversations between super admin and tenants.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- search (string, optional)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [...],
+    "pagination": { ... }
+  },
+  "message": "All chats fetched successfully"
+}
+
+Frontend Notes:
+- Only accessible by super admin users (server-side role check)
+- Shows conversation list with tenant info
+
+--------------------------------------------------------------------------------
+I2. SEARCH TENANT ADMINS
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/chats/search-tenants
+Auth: Bearer Token Required
+
+Purpose: Search for tenant admins to start a new chat conversation.
+
+Query Parameters:
+- search (string, REQUIRED) — Search query
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [...],
+    "pagination": { ... }
+  },
+  "message": "Tenant admins fetched successfully"
+}
+
+Error (400 — missing search):
+{
+  "success": false,
+  "status": 400,
+  "data": null,
+  "message": "Search query is required"
+}
+
+Frontend Notes:
+- Use this for the "New Chat" search functionality
+- search parameter is required (not optional)
+
+--------------------------------------------------------------------------------
+I3. GET CHAT HISTORY
+--------------------------------------------------------------------------------
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/chats/history/:tenantId
+Auth: Bearer Token Required
+
+Purpose: Get the message history for a specific chat with a tenant.
+
+Path Parameters:
+- tenantId (string, REQUIRED)
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 50)
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "data": [...],
+    "pagination": { ... }
+  },
+  "message": "Chat history fetched successfully"
+}
+
+Frontend Notes:
+- Paginated messages, newest first
+- Default limit is 50 messages per page
+- Use infinite scroll or "Load More" for older messages
+
+
+================================================================================
+COMPLETE FRONTEND FLOWS
+================================================================================
+
+Flow 1: Authentication
+  1. POST /api/super-admin/login → get tokens
+  2. Store accessToken in memory
+  3. GET /api/super-admin/profile → verify and get user info
+  4. On 401 → GET /api/super-admin/refresh → retry
+  5. GET /api/super-admin/logout → clear tokens
+
+Flow 2: Module Management
+  1. GET /api/super-admin/get-modules → list all modules
+  2. POST /api/super-admin/create-module → create new module
+  3. PATCH /api/super-admin/update-module-status → toggle active/inactive
+  4. PATCH /api/super-admin/edit-module → update name/description
+  5. GET /api/super-admin/module-dropdown → for plan forms
+
+Flow 3: Plan Management
+  1. GET /api/super-admin/module-dropdown → get modules for form
+  2. POST /api/super-admin/create-plan → create new plan
+  3. GET /api/super-admin/get-plans → view all plans
+  4. GET /api/super-admin/get-plans-by-type → for pricing page
+  5. PUT /api/super-admin/update-plan-modules → change plan modules
+  6. PUT /api/super-admin/update-plan-details → change plan limits/features
+
+Flow 4: Tenant Monitoring
+  1. GET /api/super-admin/get-tenants → dashboard with all tenants
+  2. Click tenant → GET /api/super-admin/get-tenant/:tenantId → full details
+  3. View invoices → GET /api/super-admin/get-tenant/:tenantId/invoices
+  4. Check billing → GET /api/incubation/subscription/billing-info/:tenantId
+  5. View subscription → GET /api/incubation/subscription/tenant/:tenantId
+
+Flow 5: Invoice Management
+  1. GET /api/super-admin/get-invoice → all invoices dashboard
+  2. Filter by status (PAID/UNPAID/OVERDUE) or search
+  3. Click tenant link → GET /api/super-admin/get-tenant/:tenantId
+
+Flow 6: Addon Management
+  1. POST /api/super-admin/create-addon → create new addon
+  2. GET /api/super-admin/get-addons → list all addons
+  3. GET /api/super-admin/get-addon/:addonId → addon detail
+  4. PUT /api/super-admin/update-addon → update addon
+  5. PATCH /api/super-admin/toggle-addon-status → enable/disable
+  6. DELETE /api/super-admin/delete-addon/:addonId → delete (if no requests)
+
+Flow 7: Addon Request Processing
+  1. GET /api/super-admin/addon-requests → list all requests
+  2. Filter by status (PENDING/IN_REVIEW/APPROVED/REJECTED)
+  3. Click request → GET /api/super-admin/addon-requests/:requestId
+  4. PATCH /api/super-admin/addon-requests/update-status → approve/reject
+     (auto-sends email to requester)
+
+Flow 8: Subscription Oversight
+  1. GET /api/incubation/subscriptions → all subscriptions
+  2. Filter by status (ACTIVE/CANCELED/PENDING)
+  3. GET /api/incubation/subscription/tenant/:tenantId → detail view
+  4. POST /api/incubation/subscription/:id/cancel → cancel if needed
+
+Flow 9: Chat
+  1. GET /api/super-admin/chats → list conversations
+  2. GET /api/super-admin/chats/search-tenants → find tenant to chat with
+  3. GET /api/super-admin/chats/history/:tenantId → load messages
+  4. (Real-time messaging via Socket.IO — see socket-connection-guide.txt)

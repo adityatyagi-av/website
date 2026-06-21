@@ -1,0 +1,256 @@
+================================================================================
+DEPLOYMENT SETUP GUIDE — ADDITIONAL CONFIGURATION REQUIRED
+================================================================================
+
+This document lists ALL external services and environment variables that must
+be configured before deploying this application to production.
+
+================================================================================
+1. RAZORPAY CONFIGURATION
+================================================================================
+
+Dashboard: https://dashboard.razorpay.com
+
+What to do:
+  A. Get API Keys:
+     - Dashboard -> Account & Settings -> API Keys -> Generate Key
+     - You get: Key ID (rzp_live_xxx) and Key Secret
+     - NEVER share Key Secret publicly
+
+  B. Enable Route (Linked Accounts):
+     - Dashboard -> Account & Settings -> Product Configuration
+     - Enable "Route" product
+     - This is REQUIRED for the office payment split flow
+
+  C. Register Webhooks:
+     - See notes/requirements/webhook-setup-guide.txt for full details
+     - Two webhooks needed: /api/webhooks/razorpay/account and /api/webhooks/razorpay/office
+
+  D. KYC Activation:
+     - Your Razorpay account itself must have Route activated (KYC complete)
+     - Until Route is active on YOUR account, you cannot create linked accounts
+
+Environment Variables:
+  RAZORPAY_KEY_ID=rzp_live_xxxxx          # or rzp_test_xxxxx for test mode
+  RAZORPAY_KEY_SECRET=xxxxxxxxxxxxx
+  RAZORPAY_ACCOUNT_WEBHOOK_SECRET=<generated-secret>
+  RAZORPAY_OFFICE_WEBHOOK_SECRET=<generated-secret>
+  RAZORPAY_WEBHOOK_SECRET=<fallback-secret>
+
+Test vs Live Mode:
+  - Use rzp_test_* keys during development (fake payments, no real money)
+  - Switch to rzp_live_* keys for production
+  - Webhooks work in both modes but Test mode allows HTTP URLs
+
+================================================================================
+2. GOOGLE OAUTH CONFIGURATION
+================================================================================
+
+Dashboard: https://console.cloud.google.com/
+
+What to do:
+  - See notes/oauth/oauth-setup-guide.txt for full step-by-step
+  - Create an OAuth 2.0 Client ID
+  - Add your production domain to Authorized JavaScript Origins
+  - Add your production domain to Authorized Redirect URIs
+
+Environment Variables:
+  GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com
+  GOOGLE_CLIENT_SECRET=xxxxx
+
+Production Checklist:
+  - Move OAuth consent screen from "Testing" to "Production"
+  - Submit for Google verification if needed (required for >100 users)
+  - Add production domain to authorized origins
+
+================================================================================
+3. FACEBOOK OAUTH CONFIGURATION (if used)
+================================================================================
+
+Dashboard: https://developers.facebook.com/
+
+Environment Variables:
+  FACEBOOK_APP_ID=xxxxx
+  FACEBOOK_APP_SECRET=xxxxx
+
+Production Checklist:
+  - App must be in "Live" mode (not Development)
+  - Valid OAuth redirect URIs must include your production domain
+  - Privacy policy URL required
+
+================================================================================
+4. APPLE SIGN-IN CONFIGURATION (if used)
+================================================================================
+
+Dashboard: https://developer.apple.com/
+
+Environment Variables:
+  APPLE_CLIENT_ID=xxxxx
+  APPLE_TEAM_ID=xxxxx
+  APPLE_KEY_ID=xxxxx
+  APPLE_PRIVATE_KEY=<path-or-content>
+
+Production Checklist:
+  - Register your production domain as a "Return URL"
+  - Ensure the Service ID is configured correctly
+
+================================================================================
+5. AWS S3 CONFIGURATION (File Uploads)
+================================================================================
+
+Dashboard: https://console.aws.amazon.com/s3
+
+What to do:
+  A. Create an S3 bucket (or use existing)
+  B. Create an IAM user with S3 permissions (PutObject, GetObject, DeleteObject)
+  C. Configure CORS on the bucket:
+     [
+       {
+         "AllowedHeaders": ["*"],
+         "AllowedMethods": ["GET", "PUT", "POST"],
+         "AllowedOrigins": ["https://yourdomain.com", "http://localhost:3000"],
+         "ExposeHeaders": ["ETag"]
+       }
+     ]
+  D. Set bucket policy for public read if needed (for public images)
+
+Environment Variables:
+  AWS_ACCESS_KEY_ID=xxxxx
+  AWS_SECRET_ACCESS_KEY=xxxxx
+  AWS_REGION=ap-south-1
+  AWS_BUCKET_NAME=your-bucket-name
+
+================================================================================
+6. DATABASE (PostgreSQL)
+================================================================================
+
+The app uses Prisma with PostgreSQL.
+
+Environment Variables:
+  DATABASE_URL=postgresql://user:password@host:5432/dbname
+
+Production Setup:
+  - Use a managed PostgreSQL service (AWS RDS, Supabase, Railway, etc.)
+  - Run migrations before first deploy: npx prisma migrate deploy
+  - Ensure SSL is enabled for production connections
+  - Add ?sslmode=require to DATABASE_URL for cloud databases
+
+================================================================================
+7. REDIS CONFIGURATION
+================================================================================
+
+Used for: caching, rate limiting, session management.
+
+Environment Variables:
+  REDIS_URL=redis://user:password@host:6379
+
+Production Setup:
+  - Use managed Redis (AWS ElastiCache, Upstash, Redis Cloud)
+  - Ensure TLS is enabled for production
+
+================================================================================
+8. EMAIL (SMTP / Nodemailer)
+================================================================================
+
+Used for: OTP emails, password reset, announcements, notifications.
+
+Environment Variables:
+  SMTP_HOST=smtp.gmail.com          # or your SMTP provider
+  SMTP_PORT=587
+  SMTP_USER=your-email@gmail.com
+  SMTP_PASSWORD=your-app-password   # Gmail requires App Password, not account password
+  SMTP_FROM=noreply@yourdomain.com
+
+Production Setup:
+  - For Gmail: Enable 2FA, create an App Password
+  - For high volume: Use SendGrid, AWS SES, or Mailgun
+  - Verify sender domain (SPF/DKIM) to avoid spam filters
+
+================================================================================
+9. JWT / AUTH CONFIGURATION
+================================================================================
+
+Environment Variables:
+  JWT_SECRET=<64+ char random string>
+  JWT_EXPIRES_IN=7d
+  JWT_REFRESH_SECRET=<another 64+ char random string>
+  JWT_REFRESH_EXPIRES_IN=30d
+
+Production:
+  - Generate cryptographically random secrets (use: openssl rand -hex 64)
+  - NEVER reuse secrets across environments
+
+================================================================================
+10. APPLICATION CONFIGURATION
+================================================================================
+
+Environment Variables:
+  PORT=8000
+  NODE_ENV=production
+  FRONTEND_URL=https://yourdomain.com
+  CORS_ORIGINS=https://yourdomain.com,https://admin.yourdomain.com
+
+================================================================================
+11. DEPLOYMENT CHECKLIST
+================================================================================
+
+Before going live:
+
+[ ] All environment variables set in production environment
+[ ] Database migrations applied (npx prisma migrate deploy)
+[ ] Prisma client generated (npx prisma generate)
+[ ] Razorpay switched to Live mode (rzp_live_* keys)
+[ ] Razorpay webhooks registered with production URLs (HTTPS only)
+[ ] Razorpay Route product enabled on your account
+[ ] Google OAuth consent screen set to "Production"
+[ ] Google OAuth redirect URIs include production domain
+[ ] S3 bucket CORS configured for production domain
+[ ] Redis connection secured (TLS)
+[ ] Database connection secured (SSL)
+[ ] SMTP tested with production email
+[ ] CORS_ORIGINS updated to production frontend URLs
+[ ] JWT secrets are unique to production
+[ ] NODE_ENV=production
+
+================================================================================
+12. RECOMMENDED HOSTING PLATFORMS
+================================================================================
+
+Backend:
+  - Railway (easy Node.js deploy, auto-SSL)
+  - Render (free tier available)
+  - AWS ECS / EC2
+  - DigitalOcean App Platform
+
+Database:
+  - Supabase (PostgreSQL + extras)
+  - Railway PostgreSQL
+  - AWS RDS
+  - Neon (serverless Postgres)
+
+Redis:
+  - Upstash (serverless, free tier)
+  - Railway Redis
+  - AWS ElastiCache
+
+File Storage:
+  - AWS S3 (recommended, already integrated)
+  - Cloudflare R2 (S3-compatible, no egress fees)
+
+================================================================================
+13. CRON JOBS — AUTOMATIC (NO EXTERNAL SETUP NEEDED)
+================================================================================
+
+The following cron jobs run automatically inside the Node.js process:
+
+  Every 30 min:  Expire bookings whose endDate has passed
+  Daily 09:00:   Pre-expiry reminders (7/3/1 days out)
+  Daily 09:30:   Pre-charge subscription reminders
+  Daily 03:00:   Dunning (suspend at day 7, cancel at day 21)
+  Daily 04:00:   Subscription completion safety net
+  Every hour:    Retry failed webhook events (max 5 attempts)
+
+These require NO external cron service. They run via node-cron in-process.
+
+If deploying to a serverless platform (Vercel, Netlify), these will NOT work.
+You need a persistent server process (Railway, Render, EC2, etc.).

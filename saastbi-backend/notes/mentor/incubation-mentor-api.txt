@@ -1,0 +1,1129 @@
+================================================================================
+MENTOR MANAGEMENT API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-10
+Base URL: /api/incubation-portal/mentors
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# DISCOVER MENTORS (Browse platform mentors)
+| Endpoint                              | Method | Purpose                                     |
+|---------------------------------------|--------|---------------------------------------------|
+| /mentors/discover                     | GET    | Browse verified mentors with filters        |
+| /mentors/discover/:mentorId           | GET    | Get mentor profile details                  |
+| /mentors/discover/:mentorId/session-types | GET | Get mentor's session types                 |
+
+# ASSOCIATED MENTORS (Manage partnerships)
+| Endpoint                                    | Method | Purpose                                |
+|---------------------------------------------|--------|----------------------------------------|
+| /mentors/associated                         | GET    | List all associated mentors            |
+| /mentors/associated/:associationId          | GET    | Get association details                |
+| /mentors/associated/:associationId          | PUT    | Update association terms               |
+| /mentors/associated/:associationId/end      | POST   | End association                        |
+
+# INVITATIONS & APPLICATIONS
+| Endpoint                                    | Method | Purpose                                |
+|---------------------------------------------|--------|----------------------------------------|
+| /mentors/invite/:mentorId                   | POST   | Invite mentor to join network          |
+| /mentors/applications                       | GET    | List pending mentor applications       |
+| /mentors/applications/:associationId/approve| POST   | Approve mentor application             |
+| /mentors/applications/:associationId/reject | POST   | Reject mentor application              |
+
+# SESSION MANAGEMENT (View startup sessions)
+| Endpoint                                    | Method | Purpose                                |
+|---------------------------------------------|--------|----------------------------------------|
+| /mentors/sessions                           | GET    | List all sessions (all mentors)        |
+| /mentors/sessions/:sessionId                | GET    | Get session details                    |
+
+# USAGE & ANALYTICS
+| Endpoint                                    | Method | Purpose                                |
+|---------------------------------------------|--------|----------------------------------------|
+| /mentors/usage                              | GET    | Get mentor usage by startups           |
+| /mentors/usage/:mentorId                    | GET    | Get specific mentor's usage stats      |
+| /startup/:startupId/mentor-usage            | GET    | Get mentor usage for specific startup  |
+| /mentors/analytics                          | GET    | Get overall mentor analytics           |
+| /mentors/spending                           | GET    | Get mentor spending report             |
+
+# DASHBOARD
+| Endpoint                     | Method | Purpose                                           |
+|------------------------------|--------|---------------------------------------------------|
+| /mentors/dashboard           | GET    | Get mentor management dashboard stats             |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+AssociationStatus:
+- INVITED         (Incubator invited mentor, awaiting response)
+- PENDING         (Mentor applied, awaiting approval)
+- ACTIVE          (Partnership is active)
+- REJECTED        (Application/invitation was rejected)
+- ENDED           (Partnership has ended)
+
+PaymentModel:
+- INCUBATOR_PAYS  (Incubator covers 100% of session cost)
+- STARTUP_PAYS    (Startup pays 100% directly)
+- SUBSIDIZED      (Cost split between incubator and startup)
+- FREE            (Sessions are free - no payment)
+- RETAINER        (Monthly retainer fee to mentor)
+
+MentorVerificationStatus:
+- PENDING
+- VERIFIED
+- REJECTED
+
+MentorSessionStatus:
+- PENDING
+- CONFIRMED
+- COMPLETED
+- CANCELLED
+- NO_SHOW
+
+MentorPaymentStatus:
+- PENDING
+- PAID
+- INCUBATOR_BILLED
+- WAIVED
+- REFUNDED
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 100,
+      "totalPages": 10
+    }
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. DISCOVER MENTORS
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 BROWSE VERIFIED MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/discover
+Auth: Portal Token Required
+
+Purpose: Browse all verified platform mentors to find potential partners.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+- search (string) - Search by name, headline, bio
+- expertise (string | string[]) - Filter by expertise areas
+- industries (string | string[]) - Filter by industries
+- languages (string | string[]) - Filter by languages
+- minPrice (number) - Minimum session price
+- maxPrice (number) - Maximum session price
+- minRating (number) - Minimum rating (1-5)
+- sortBy ("rating" | "sessions" | "newest", default: "rating")
+
+Example: ?search=product&expertise=Growth&minRating=4&sortBy=rating
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentors fetched",
+  "data": {
+    "mentors": [
+      {
+        "id": "cuid_mentor_123",
+        "headline": "Senior Product Manager | 10+ Years Experience",
+        "bio": "Helping startups build great products...",
+        "expertise": ["Product Management", "Growth Strategy"],
+        "industries": ["SaaS", "FinTech"],
+        "languages": ["English", "Hindi"],
+        "experience": 10,
+        "rating": 4.8,
+        "reviewCount": 45,
+        "totalSessions": 120,
+        "isAccepting": true,
+        "verificationStatus": "VERIFIED",
+        "user": {
+          "id": "...",
+          "firstName": "John",
+          "lastName": "Doe",
+          "avatarUrl": "..."
+        },
+        "sessionTypes": [
+          {
+            "id": "...",
+            "name": "1:1 Strategy Session",
+            "duration": 60,
+            "price": 2500
+          }
+        ]
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 12,
+      "total": 85,
+      "totalPages": 8
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET MENTOR PROFILE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/discover/:mentorId
+Auth: Portal Token Required
+
+Purpose: Get complete profile of a specific mentor.
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentor profile fetched",
+  "data": {
+    "id": "cuid_mentor_123",
+    "headline": "Senior Product Manager | 10+ Years Experience",
+    "bio": "Detailed bio here...",
+    "expertise": ["Product Management", "Growth Strategy", "Fundraising"],
+    "industries": ["SaaS", "FinTech", "HealthTech"],
+    "languages": ["English", "Hindi"],
+    "experience": 10,
+    "linkedinUrl": "https://linkedin.com/in/mentor",
+    "websiteUrl": "https://mentor.com",
+    "timezone": "Asia/Kolkata",
+    "rating": 4.8,
+    "reviewCount": 45,
+    "totalSessions": 120,
+    "isAccepting": true,
+    "verificationStatus": "VERIFIED",
+    "user": {
+      "id": "...",
+      "firstName": "John",
+      "lastName": "Doe",
+      "email": "john@example.com",
+      "avatarUrl": "..."
+    },
+    "sessionTypes": [...],
+    "packages": [...],
+    "reviews": [
+      {
+        "id": "...",
+        "rating": 5,
+        "review": "Excellent mentor!",
+        "createdAt": "..."
+      }
+    ],
+    "existingAssociation": null
+  }
+}
+
+Note: existingAssociation will contain association details if mentor is already
+      associated with your incubator.
+
+--------------------------------------------------------------------------------
+1.3 GET MENTOR SESSION TYPES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/discover/:mentorId/session-types
+Auth: Portal Token Required
+
+Purpose: Get all active session types offered by a mentor.
+
+Response (200):
+{
+  "success": true,
+  "message": "Session types fetched",
+  "data": [
+    {
+      "id": "cuid_session_type_1",
+      "name": "1:1 Strategy Session",
+      "description": "Deep dive into your product strategy...",
+      "duration": 60,
+      "price": 2500,
+      "currency": "INR",
+      "isActive": true
+    },
+    {
+      "id": "cuid_session_type_2",
+      "name": "Quick Call",
+      "description": "30-minute focused discussion",
+      "duration": 30,
+      "price": 1500,
+      "currency": "INR",
+      "isActive": true
+    }
+  ]
+}
+
+================================================================================
+2. ASSOCIATED MENTORS
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 GET ASSOCIATED MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/associated
+Auth: Portal Token Required
+
+Purpose: List all mentors associated with your incubator.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status ("INVITED" | "PENDING" | "ACTIVE" | "REJECTED" | "ENDED")
+- search (string) - Search by mentor name
+- paymentModel ("INCUBATOR_PAYS" | "STARTUP_PAYS" | "SUBSIDIZED" | "FREE" | "RETAINER")
+
+Response (200):
+{
+  "success": true,
+  "message": "Associated mentors fetched",
+  "data": {
+    "associations": [
+      {
+        "id": "cuid_assoc_1",
+        "status": "ACTIVE",
+        "paymentModel": "SUBSIDIZED",
+        "incubatorSharePercent": 50,
+        "monthlyRetainer": null,
+        "startDate": "2026-01-01",
+        "endDate": null,
+        "mentor": {
+          "id": "cuid_mentor_123",
+          "headline": "Senior Product Manager",
+          "expertise": ["Product Management"],
+          "rating": 4.8,
+          "totalSessions": 120,
+          "user": {
+            "firstName": "John",
+            "lastName": "Doe",
+            "avatarUrl": "..."
+          }
+        },
+        "stats": {
+          "sessionsCount": 25,
+          "startupsHelped": 8,
+          "totalSpent": 31250
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 12,
+      "totalPages": 2
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+2.2 GET ASSOCIATION DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/associated/:associationId
+Auth: Portal Token Required
+
+Purpose: Get complete details of a mentor association.
+
+Response (200):
+{
+  "success": true,
+  "message": "Association details fetched",
+  "data": {
+    "id": "cuid_assoc_1",
+    "status": "ACTIVE",
+    "paymentModel": "SUBSIDIZED",
+    "incubatorSharePercent": 50,
+    "monthlyRetainer": null,
+    "startDate": "2026-01-01",
+    "endDate": null,
+    "notes": "Focused on product mentorship",
+    "mentor": {
+      "id": "cuid_mentor_123",
+      "headline": "Senior Product Manager",
+      "bio": "...",
+      "expertise": [...],
+      "industries": [...],
+      "rating": 4.8,
+      "user": { ... },
+      "sessionTypes": [...],
+      "packages": [...]
+    },
+    "stats": {
+      "totalSessions": 25,
+      "completedSessions": 22,
+      "pendingSessions": 3,
+      "startupsHelped": 8,
+      "totalSpent": 31250,
+      "avgSessionRating": 4.9
+    },
+    "recentSessions": [
+      {
+        "id": "...",
+        "startTime": "...",
+        "status": "COMPLETED",
+        "startup": { "name": "TechStartup Inc" }
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+2.3 UPDATE ASSOCIATION
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/mentors/associated/:associationId
+Auth: Portal Token Required
+
+Purpose: Update association terms (payment model, subsidy percentage).
+
+Request Body:
+{
+  "paymentModel": "SUBSIDIZED",
+  "incubatorSharePercent": 75,
+  "notes": "Increased subsidy for Q2"
+}
+
+Note: Can only update ACTIVE associations. Changes apply to new sessions only.
+
+Response (200):
+{
+  "success": true,
+  "message": "Association updated",
+  "data": {
+    "id": "...",
+    "paymentModel": "SUBSIDIZED",
+    "incubatorSharePercent": 75,
+    "notes": "Increased subsidy for Q2"
+  }
+}
+
+--------------------------------------------------------------------------------
+2.4 END ASSOCIATION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/mentors/associated/:associationId/end
+Auth: Portal Token Required
+
+Purpose: End an active association with a mentor.
+
+Request Body:
+{
+  "reason": "Program restructuring",
+  "endDate": "2026-03-31"
+}
+
+Note: If endDate is not provided, association ends immediately. Pending sessions
+      will remain scheduled but new bookings will be blocked.
+
+Response (200):
+{
+  "success": true,
+  "message": "Association ended",
+  "data": {
+    "id": "...",
+    "status": "ENDED",
+    "endDate": "2026-03-31",
+    "endReason": "Program restructuring"
+  }
+}
+
+================================================================================
+3. INVITATIONS & APPLICATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 INVITE MENTOR
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/mentors/invite/:mentorId
+Auth: Portal Token Required
+
+Purpose: Send invitation to a mentor to join your incubator's network.
+
+Request Body:
+{
+  "paymentModel": "SUBSIDIZED",
+  "incubatorSharePercent": 50,
+  "monthlyRetainer": null,
+  "message": "We'd love to have you mentor our startups in product strategy",
+  "notes": "Internal note: Priority mentor for FinTech cohort"
+}
+
+Payment Model Options:
+- INCUBATOR_PAYS: Incubator pays 100% (incubatorSharePercent must be 100)
+- STARTUP_PAYS: Startup pays 100% (incubatorSharePercent must be 0)
+- SUBSIDIZED: Split cost (set incubatorSharePercent between 1-99)
+- FREE: No payment required (sessions are free)
+- RETAINER: Monthly fee (set monthlyRetainer amount)
+
+Response (201):
+{
+  "success": true,
+  "message": "Invitation sent",
+  "data": {
+    "id": "cuid_assoc_new",
+    "mentorProfileId": "cuid_mentor_123",
+    "tenantId": "cuid_tenant_1",
+    "status": "INVITED",
+    "paymentModel": "SUBSIDIZED",
+    "incubatorSharePercent": 50,
+    "invitedAt": "2026-02-10T10:00:00Z",
+    "mentor": {
+      "user": {
+        "firstName": "John",
+        "lastName": "Doe"
+      }
+    }
+  }
+}
+
+Error (409):
+{
+  "success": false,
+  "message": "Mentor already has an association with this incubator"
+}
+
+--------------------------------------------------------------------------------
+3.2 GET PENDING APPLICATIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/applications
+Auth: Portal Token Required
+
+Purpose: List all pending applications from mentors wanting to join.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+
+Response (200):
+{
+  "success": true,
+  "message": "Applications fetched",
+  "data": {
+    "applications": [
+      {
+        "id": "cuid_assoc_2",
+        "status": "PENDING",
+        "proposedPaymentModel": "SUBSIDIZED",
+        "proposedSharePercent": 30,
+        "applicationMessage": "I'd like to help your FinTech startups...",
+        "appliedAt": "2026-02-05T10:00:00Z",
+        "mentor": {
+          "id": "cuid_mentor_456",
+          "headline": "FinTech Expert",
+          "expertise": ["FinTech", "Compliance"],
+          "rating": 4.7,
+          "totalSessions": 80,
+          "user": {
+            "firstName": "Jane",
+            "lastName": "Smith",
+            "avatarUrl": "..."
+          }
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 3,
+      "totalPages": 1
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.3 APPROVE APPLICATION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/mentors/applications/:associationId/approve
+Auth: Portal Token Required
+
+Purpose: Approve a mentor's application to join your network.
+
+Request Body:
+{
+  "paymentModel": "SUBSIDIZED",
+  "incubatorSharePercent": 40,
+  "notes": "Approved for FinTech cohort"
+}
+
+Note: You can override the mentor's proposed terms with your own.
+
+Response (200):
+{
+  "success": true,
+  "message": "Application approved",
+  "data": {
+    "id": "...",
+    "status": "ACTIVE",
+    "paymentModel": "SUBSIDIZED",
+    "incubatorSharePercent": 40,
+    "startDate": "2026-02-10"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 REJECT APPLICATION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/mentors/applications/:associationId/reject
+Auth: Portal Token Required
+
+Purpose: Reject a mentor's application.
+
+Request Body:
+{
+  "reason": "Currently not accepting mentors in this domain"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Application rejected",
+  "data": {
+    "id": "...",
+    "status": "REJECTED",
+    "rejectionReason": "Currently not accepting mentors in this domain"
+  }
+}
+
+================================================================================
+4. SESSION MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 GET ALL SESSIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/sessions
+Auth: Portal Token Required
+
+Purpose: List all mentor sessions across your incubator (all mentors, all startups).
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- mentorId (string) - Filter by specific mentor
+- startupId (string) - Filter by specific startup
+- status ("PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW")
+- paymentStatus ("PENDING" | "PAID" | "INCUBATOR_BILLED" | "WAIVED" | "REFUNDED")
+- startDate (string) - ISO date for range
+- endDate (string) - ISO date for range
+- upcoming (boolean) - Filter upcoming sessions
+- past (boolean) - Filter past sessions
+
+Response (200):
+{
+  "success": true,
+  "message": "Sessions fetched",
+  "data": {
+    "sessions": [
+      {
+        "id": "cuid_session_1",
+        "startTime": "2026-02-15T10:00:00Z",
+        "endTime": "2026-02-15T11:00:00Z",
+        "duration": 60,
+        "status": "CONFIRMED",
+        "paymentStatus": "INCUBATOR_BILLED",
+        "price": 2500,
+        "bookingContext": "INCUBATOR",
+        "paidBy": "INCUBATOR",
+        "incubatorShare": 2500,
+        "startupShare": 0,
+        "mentor": {
+          "id": "...",
+          "user": {
+            "firstName": "John",
+            "lastName": "Doe",
+            "avatarUrl": "..."
+          }
+        },
+        "startup": {
+          "id": "...",
+          "name": "TechStartup Inc",
+          "logoUrl": "..."
+        },
+        "sessionType": {
+          "name": "1:1 Strategy Session",
+          "duration": 60
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 150,
+      "totalPages": 15
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+4.2 GET SESSION DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/sessions/:sessionId
+Auth: Portal Token Required
+
+Purpose: Get complete session details.
+
+Response (200):
+{
+  "success": true,
+  "message": "Session details fetched",
+  "data": {
+    "id": "cuid_session_1",
+    "startTime": "2026-02-15T10:00:00Z",
+    "endTime": "2026-02-15T11:00:00Z",
+    "duration": 60,
+    "status": "COMPLETED",
+    "paymentStatus": "INCUBATOR_BILLED",
+    "price": 2500,
+    "grossAmount": 2500,
+    "platformFee": 250,
+    "mentorPayout": 2250,
+    "bookingContext": "INCUBATOR",
+    "paidBy": "INCUBATOR",
+    "incubatorShare": 2500,
+    "startupShare": 0,
+    "notes": "Discussed product roadmap",
+    "completedAt": "2026-02-15T11:00:00Z",
+    "mentor": {
+      "id": "...",
+      "headline": "...",
+      "user": { ... }
+    },
+    "startup": {
+      "id": "...",
+      "name": "TechStartup Inc",
+      "logoUrl": "...",
+      "members": [...]
+    },
+    "sessionType": { ... },
+    "association": {
+      "id": "...",
+      "paymentModel": "INCUBATOR_PAYS"
+    },
+    "review": {
+      "rating": 5,
+      "review": "Excellent session!"
+    }
+  }
+}
+
+================================================================================
+5. USAGE & ANALYTICS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 GET MENTOR USAGE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/usage
+Auth: Portal Token Required
+
+Purpose: Get mentor usage breakdown by startups.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- startDate (string) - ISO date for period start
+- endDate (string) - ISO date for period end
+- sortBy ("sessions" | "spending", default: "sessions")
+
+Response (200):
+{
+  "success": true,
+  "message": "Usage data fetched",
+  "data": {
+    "summary": {
+      "totalSessions": 150,
+      "completedSessions": 140,
+      "totalSpending": 375000,
+      "activeMentors": 12,
+      "activeStartups": 25
+    },
+    "byStartup": [
+      {
+        "startup": {
+          "id": "...",
+          "name": "TechStartup Inc",
+          "logoUrl": "..."
+        },
+        "sessionsCount": 15,
+        "completedSessions": 14,
+        "totalSpent": 37500,
+        "mentorsUsed": 3,
+        "avgRating": 4.8
+      }
+    ],
+    "byMentor": [
+      {
+        "mentor": {
+          "id": "...",
+          "user": { "firstName": "John", "lastName": "Doe" }
+        },
+        "sessionsCount": 25,
+        "startupsHelped": 8,
+        "totalEarned": 56250,
+        "avgRating": 4.9
+      }
+    ],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 GET MENTOR USAGE STATS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/usage/:mentorId
+Auth: Portal Token Required
+
+Purpose: Get detailed usage stats for a specific mentor.
+
+Query Parameters:
+- startDate (string) - ISO date for period start
+- endDate (string) - ISO date for period end
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentor usage fetched",
+  "data": {
+    "mentor": {
+      "id": "cuid_mentor_123",
+      "headline": "Senior Product Manager",
+      "user": { ... }
+    },
+    "association": {
+      "id": "...",
+      "paymentModel": "SUBSIDIZED",
+      "incubatorSharePercent": 50,
+      "startDate": "2026-01-01"
+    },
+    "stats": {
+      "totalSessions": 25,
+      "completedSessions": 22,
+      "cancelledSessions": 2,
+      "noShowSessions": 1,
+      "startupsHelped": 8,
+      "totalSpent": 31250,
+      "avgSessionRating": 4.9
+    },
+    "byStartup": [
+      {
+        "startup": { "id": "...", "name": "..." },
+        "sessionsCount": 5,
+        "totalSpent": 6250
+      }
+    ],
+    "recentSessions": [...]
+  }
+}
+
+--------------------------------------------------------------------------------
+5.3 GET STARTUP MENTOR USAGE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/startup/:startupId/mentor-usage
+Auth: Portal Token Required
+
+Purpose: Get mentor usage stats for a specific startup.
+
+Query Parameters:
+- startDate (string) - ISO date for period start
+- endDate (string) - ISO date for period end
+
+Response (200):
+{
+  "success": true,
+  "message": "Startup mentor usage fetched",
+  "data": {
+    "startup": {
+      "id": "cuid_startup_123",
+      "name": "TechStartup Inc",
+      "logoUrl": "..."
+    },
+    "stats": {
+      "totalSessions": 15,
+      "completedSessions": 14,
+      "pendingSessions": 1,
+      "totalSpent": 37500,
+      "incubatorPaid": 18750,
+      "startupPaid": 18750,
+      "mentorsUsed": 3,
+      "avgSessionRating": 4.8
+    },
+    "byMentor": [
+      {
+        "mentor": {
+          "id": "cuid_mentor_123",
+          "user": { "firstName": "John", "lastName": "Doe" }
+        },
+        "sessionsCount": 8,
+        "totalSpent": 20000,
+        "avgRating": 4.9
+      }
+    ],
+    "recentSessions": [
+      {
+        "id": "...",
+        "startTime": "...",
+        "mentor": { ... },
+        "status": "COMPLETED"
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+5.4 GET ANALYTICS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/analytics
+Auth: Portal Token Required
+
+Purpose: Get comprehensive mentor analytics for the incubator.
+
+Query Parameters:
+- period ("week" | "month" | "quarter" | "year", default: "month")
+- startDate (string) - ISO date for custom range
+- endDate (string) - ISO date for custom range
+
+Response (200):
+{
+  "success": true,
+  "message": "Analytics fetched",
+  "data": {
+    "period": "month",
+    "overview": {
+      "totalMentors": 12,
+      "activeMentors": 10,
+      "totalSessions": 50,
+      "completedSessions": 45,
+      "totalSpending": 125000,
+      "avgSessionRating": 4.7
+    },
+    "trends": {
+      "sessionsGrowth": 15,
+      "spendingGrowth": 22,
+      "mentorGrowth": 2
+    },
+    "topMentors": [
+      {
+        "mentor": { ... },
+        "sessions": 12,
+        "rating": 4.9
+      }
+    ],
+    "topStartups": [
+      {
+        "startup": { ... },
+        "sessions": 8,
+        "spending": 20000
+      }
+    ],
+    "sessionsByStatus": {
+      "COMPLETED": 45,
+      "CONFIRMED": 3,
+      "CANCELLED": 2
+    },
+    "sessionsByPaymentModel": {
+      "INCUBATOR_PAYS": 30,
+      "SUBSIDIZED": 15,
+      "STARTUP_PAYS": 5
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+5.4 GET SPENDING REPORT
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/spending
+Auth: Portal Token Required
+
+Purpose: Get detailed spending report on mentor sessions.
+
+Query Parameters:
+- startDate (string) - ISO date for period start
+- endDate (string) - ISO date for period end
+- groupBy ("mentor" | "startup" | "month", default: "month")
+
+Response (200):
+{
+  "success": true,
+  "message": "Spending report fetched",
+  "data": {
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-02-10"
+    },
+    "totals": {
+      "totalSpending": 375000,
+      "incubatorPaid": 250000,
+      "startupPaid": 125000,
+      "platformFees": 37500,
+      "sessionsCount": 150
+    },
+    "byPaymentModel": {
+      "INCUBATOR_PAYS": 150000,
+      "SUBSIDIZED": 100000,
+      "STARTUP_PAYS": 125000,
+      "FREE": 0
+    },
+    "breakdown": [
+      {
+        "month": "2026-01",
+        "spending": 200000,
+        "sessions": 80
+      },
+      {
+        "month": "2026-02",
+        "spending": 175000,
+        "sessions": 70
+      }
+    ]
+  }
+}
+
+================================================================================
+6. DASHBOARD
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 GET DASHBOARD STATS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/mentors/dashboard
+Auth: Portal Token Required
+
+Purpose: Get mentor management dashboard summary.
+
+Response (200):
+{
+  "success": true,
+  "message": "Dashboard fetched",
+  "data": {
+    "overview": {
+      "totalMentors": 12,
+      "activeMentors": 10,
+      "pendingInvitations": 2,
+      "pendingApplications": 3
+    },
+    "sessions": {
+      "totalThisMonth": 50,
+      "completedThisMonth": 45,
+      "upcomingSessions": 8,
+      "todaySessions": 3
+    },
+    "spending": {
+      "thisMonth": 125000,
+      "lastMonth": 100000,
+      "growth": 25
+    },
+    "pendingActions": {
+      "applications": [
+        {
+          "id": "...",
+          "mentor": { "user": { "firstName": "...", "lastName": "..." } },
+          "appliedAt": "..."
+        }
+      ],
+      "invitations": [
+        {
+          "id": "...",
+          "mentor": { ... },
+          "invitedAt": "..."
+        }
+      ]
+    },
+    "recentSessions": [
+      {
+        "id": "...",
+        "startTime": "...",
+        "mentor": { ... },
+        "startup": { ... },
+        "status": "COMPLETED"
+      }
+    ],
+    "topMentors": [
+      {
+        "mentor": { ... },
+        "sessions": 12,
+        "rating": 4.9
+      }
+    ]
+  }
+}
+
+================================================================================
+PAYMENT MODEL EXAMPLES
+================================================================================
+
+Example 1: INCUBATOR_PAYS
+Session Price: Rs. 2500
+Incubator Share: 100% (Rs. 2500)
+Startup Share: 0% (Rs. 0)
+Startup pays: Nothing
+Incubator billed: Rs. 2500
+
+Example 2: SUBSIDIZED (50%)
+Session Price: Rs. 2500
+Incubator Share: 50% (Rs. 1250)
+Startup Share: 50% (Rs. 1250)
+Startup pays: Rs. 1250
+Incubator billed: Rs. 1250
+
+Example 3: STARTUP_PAYS
+Session Price: Rs. 2500
+Incubator Share: 0% (Rs. 0)
+Startup Share: 100% (Rs. 2500)
+Startup pays: Rs. 2500
+Incubator billed: Nothing
+
+Example 4: FREE
+Session Price: Rs. 0
+No payment required from anyone
+
+Example 5: RETAINER
+Monthly Retainer: Rs. 50000
+Sessions covered under retainer
+Additional sessions may apply standard rates
+
+================================================================================
+END OF INCUBATION MENTOR API DOCUMENTATION
+================================================================================

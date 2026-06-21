@@ -1,0 +1,513 @@
+================================================================================
+SUPER ADMIN — CHAT API DOCUMENTATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-22
+Base URL: /api/super-admin
+
+Authentication: SuperAdmin Bearer Token (authenticate middleware)
+Note: All REST endpoints require a valid SuperAdmin JWT token.
+      Socket.IO requires the same token in handshake.auth.token.
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+The Super Admin has TWO chat systems:
+
+1. SUPPORT CHAT (Tenant ↔ SuperAdmin)
+   - REST API for fetching chat history, listing all tenant chats, searching
+   - Socket.IO (default namespace "/") for real-time messaging
+   - Uses models: Chat, TenantMessage
+   - SuperAdmin can message ANY tenant. Tenant admins can only message SuperAdmin.
+
+2. UNIVERSAL CHAT (User ↔ User/Page/Startup/Tenant)
+   - SuperAdmin does NOT use universal chat directly
+   - This system is for ecosystem users (see ecosystem-chat-api.txt)
+
+================================================================================
+SUPPORT CHAT — DATA MODELS
+================================================================================
+
+Chat:
+  - id: string (cuid)
+  - tenantId: string (unique — one chat per tenant)
+  - lastMessage: string | null (truncated to 100 chars)
+  - lastMessageAt: DateTime | null
+  - unreadCount: number (tracks unread messages from tenant side)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+TenantMessage:
+  - id: string (cuid)
+  - chatId: string (references Chat.id)
+  - senderId: string (either SuperAdmin.id or IncubationUser.id)
+  - senderType: "SUPER_ADMIN" | "TENANT_ADMIN"
+  - content: string
+  - isRead: boolean (default: false)
+  - readBy: string[] (array of user IDs who have read this message)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+SenderType enum:
+  - SUPER_ADMIN
+  - TENANT_ADMIN
+
+================================================================================
+API QUICK REFERENCE
+================================================================================
+
+| Endpoint                        | Method | Purpose                                  |
+|---------------------------------|--------|------------------------------------------|
+| /all                            | GET    | List all tenant chats (SuperAdmin only)  |
+| /search-tenants                 | GET    | Search tenant admins to start a chat     |
+| /history/:tenantId              | GET    | Get chat history with a specific tenant  |
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message"
+}
+
+================================================================================
+1. LIST ALL CHATS
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/all
+Auth: SuperAdmin Token Required
+
+Purpose: Get a paginated list of ALL tenant chats. Shows latest message,
+unread count, and tenant details for each chat. SuperAdmin-only endpoint.
+
+Access Control: Only SuperAdmin role can access this endpoint. Non-SuperAdmin
+users will receive a 403 Forbidden error.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- search (string, optional) — Search by tenant name or tenantKey
+
+Example: ?page=1&limit=20&search=Innovation
+
+Response (200):
+{
+  "success": true,
+  "message": "All chats fetched successfully",
+  "data": {
+    "chats": [
+      {
+        "id": "cuid_chat_1",
+        "tenantId": "cuid_tenant_123",
+        "tenant": {
+          "id": "cuid_tenant_123",
+          "organizationName": "Innovation Hub",
+          "tenantKey": "innovation-hub",
+          "status": "ACTIVE"
+        },
+        "lastMessage": "Thank you for the update",
+        "lastMessageAt": "2026-02-22T10:30:00Z",
+        "unreadCount": 3,
+        "hasMessages": true
+      },
+      {
+        "id": "cuid_chat_2",
+        "tenantId": "cuid_tenant_456",
+        "tenant": {
+          "id": "cuid_tenant_456",
+          "organizationName": "Startup Valley",
+          "tenantKey": "startup-valley",
+          "status": "ACTIVE"
+        },
+        "lastMessage": "We need help with billing",
+        "lastMessageAt": "2026-02-21T15:00:00Z",
+        "unreadCount": 0,
+        "hasMessages": true
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 15,
+      "totalPages": 1
+    }
+  }
+}
+
+Frontend Notes:
+- Sort chats by lastMessageAt descending
+- Show unreadCount as badge on each chat item
+- Search filters by tenant name and tenantKey
+
+================================================================================
+2. SEARCH TENANT ADMINS
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/search-tenants
+Auth: SuperAdmin Token Required
+
+Purpose: Search for tenant admins to start a new support chat. Returns admin
+details with their chat status (whether a chat already exists).
+
+Access Control: SuperAdmin only.
+
+Query Parameters:
+- search (string, REQUIRED) — Search query (name, email, org name, tenantKey)
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Example: ?search=john&page=1&limit=20
+
+Response (200):
+{
+  "success": true,
+  "message": "Tenant admins fetched successfully",
+  "data": {
+    "tenantAdmins": [
+      {
+        "id": "cuid_incuser_1",
+        "name": "John Smith",
+        "email": "john@innovationhub.com",
+        "tenantId": "cuid_tenant_123",
+        "tenant": {
+          "id": "cuid_tenant_123",
+          "organizationName": "Innovation Hub",
+          "tenantKey": "innovation-hub",
+          "status": "ACTIVE"
+        },
+        "chat": {
+          "id": "cuid_chat_1",
+          "lastMessage": "Thank you",
+          "lastMessageAt": "2026-02-22T10:30:00Z",
+          "unreadCount": 0
+        },
+        "hasChat": true
+      },
+      {
+        "id": "cuid_incuser_2",
+        "name": "Jane Doe",
+        "email": "jane@startupvalley.com",
+        "tenantId": "cuid_tenant_456",
+        "tenant": {
+          "id": "cuid_tenant_456",
+          "organizationName": "Startup Valley",
+          "tenantKey": "startup-valley",
+          "status": "ACTIVE"
+        },
+        "chat": null,
+        "hasChat": false
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 2,
+      "totalPages": 1
+    }
+  }
+}
+
+Error (400 - missing search):
+{
+  "success": false,
+  "message": "Search query is required"
+}
+
+Frontend Notes:
+- hasChat: true → Navigate directly to existing chat
+- hasChat: false → Start new chat via Socket.IO (first message auto-creates)
+- Search matches: admin name, admin email, org name, tenantKey
+
+================================================================================
+3. GET CHAT HISTORY
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/super-admin/history/:tenantId
+Auth: SuperAdmin Token Required
+
+Purpose: Get paginated message history with a specific tenant. Messages are
+returned in chronological order (oldest first within the page).
+
+Path Parameters:
+- tenantId (string, REQUIRED) — The tenant's ID
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 50)
+
+Example: /history/cuid_tenant_123?page=1&limit=50
+
+Response (200 — with messages):
+{
+  "success": true,
+  "message": "Chat history fetched successfully",
+  "data": {
+    "chat": {
+      "id": "cuid_chat_1",
+      "tenantId": "cuid_tenant_123",
+      "tenant": {
+        "id": "cuid_tenant_123",
+        "organizationName": "Innovation Hub",
+        "tenantKey": "innovation-hub"
+      },
+      "lastMessage": "Thank you for the update",
+      "lastMessageAt": "2026-02-22T10:30:00Z",
+      "unreadCount": 0
+    },
+    "messages": [
+      {
+        "id": "cuid_msg_1",
+        "chatId": "cuid_chat_1",
+        "senderId": "cuid_incuser_1",
+        "senderType": "TENANT_ADMIN",
+        "content": "Hello, we need help with our billing",
+        "isRead": true,
+        "readBy": ["cuid_superadmin_1"],
+        "createdAt": "2026-02-22T10:00:00Z",
+        "updatedAt": "2026-02-22T10:00:00Z",
+        "sender": {
+          "id": "cuid_incuser_1",
+          "name": "John Smith",
+          "email": "john@innovationhub.com"
+        }
+      },
+      {
+        "id": "cuid_msg_2",
+        "chatId": "cuid_chat_1",
+        "senderId": "cuid_superadmin_1",
+        "senderType": "SUPER_ADMIN",
+        "content": "Sure, I can help with that. What specifically?",
+        "isRead": false,
+        "readBy": [],
+        "createdAt": "2026-02-22T10:15:00Z",
+        "updatedAt": "2026-02-22T10:15:00Z",
+        "sender": {
+          "id": "cuid_superadmin_1",
+          "name": "Admin User",
+          "email": "admin@saas.com",
+          "role": "ADMIN"
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 50,
+      "total": 28,
+      "totalPages": 1
+    }
+  }
+}
+
+Response (200 — no chat exists):
+{
+  "success": true,
+  "message": "Chat history fetched successfully",
+  "data": {
+    "chat": null,
+    "messages": [],
+    "pagination": {
+      "page": 1,
+      "limit": 50,
+      "total": 0,
+      "totalPages": 0
+    }
+  }
+}
+
+Frontend Notes:
+- Messages are in CHRONOLOGICAL order (oldest first)
+- sender object contains the sender details resolved from their model
+- senderType tells you whether the message is from SUPER_ADMIN or TENANT_ADMIN
+- Distinguish message bubbles: right-align SUPER_ADMIN, left-align TENANT_ADMIN
+
+================================================================================
+SOCKET.IO — REAL-TIME SUPPORT CHAT
+================================================================================
+
+Namespace: DEFAULT namespace (no path prefix — just connect to the server root)
+Transport: WebSocket with polling fallback
+
+--------------------------------------------------------------------------------
+CONNECTION & AUTHENTICATION
+--------------------------------------------------------------------------------
+
+Connect with token:
+  const socket = io("{{SERVER_URL}}", {
+    auth: { token: "Bearer <superadmin_jwt_token>" }
+  });
+
+  // OR pass via headers:
+  const socket = io("{{SERVER_URL}}", {
+    extraHeaders: { authorization: "Bearer <superadmin_jwt_token>" }
+  });
+
+On successful connection:
+- SuperAdmin joins room "super-admins" automatically
+- All SuperAdmins receive messages from ALL tenants in real-time
+
+On auth failure:
+  socket.on("connect_error", (err) => {
+    console.error(err.message); // "Authentication error: ..."
+  });
+
+--------------------------------------------------------------------------------
+EMIT EVENTS (Frontend → Server)
+--------------------------------------------------------------------------------
+
+1. SEND MESSAGE
+   Event: "send-message"
+   Payload:
+   {
+     "content": "Your message text here",
+     "tenantId": "cuid_tenant_123"    // REQUIRED for SuperAdmin
+   }
+
+   Notes:
+   - tenantId is REQUIRED when sending as SuperAdmin
+   - A Chat record is auto-created if one doesn't exist for that tenant
+   - Content cannot be empty
+
+   Response Event: "message-sent" (sent back to the sender)
+   Response Payload:
+   {
+     "id": "cuid_msg_new",
+     "chatId": "cuid_chat_1",
+     "senderId": "cuid_superadmin_1",
+     "senderType": "SUPER_ADMIN",
+     "content": "Your message text here",
+     "isRead": false,
+     "readBy": [],
+     "createdAt": "2026-02-22T10:30:00Z",
+     "updatedAt": "2026-02-22T10:30:00Z",
+     "sender": {
+       "id": "cuid_superadmin_1",
+       "name": "Admin User",
+       "type": "SUPER_ADMIN"
+     },
+     "chat": {
+       "id": "cuid_chat_1",
+       "tenantId": "cuid_tenant_123",
+       "tenant": {
+         "id": "cuid_tenant_123",
+         "organizationName": "Innovation Hub",
+         "tenantKey": "innovation-hub"
+       }
+     }
+   }
+
+2. MARK AS READ
+   Event: "mark-as-read"
+   Payload:
+   {
+     "chatId": "cuid_chat_1"
+   }
+
+   Notes:
+   - Only SUPER_ADMIN can mark tenant messages as read
+   - Adds SuperAdmin's ID to the readBy array of unread messages
+   - Resets the chat's unreadCount to 0
+
+   Response Event: "messages-read"
+   Response Payload:
+   {
+     "chatId": "cuid_chat_1"
+   }
+
+3. TYPING INDICATOR
+   Event: "typing"
+   Payload:
+   {
+     "tenantId": "cuid_tenant_123",
+     "isTyping": true
+   }
+
+   Notes:
+   - Broadcasts to the specific tenant's room
+   - Send isTyping: false when user stops typing
+
+--------------------------------------------------------------------------------
+LISTEN EVENTS (Server → Frontend)
+--------------------------------------------------------------------------------
+
+1. NEW MESSAGE (from any tenant)
+   Event: "new-message"
+   Payload: Same structure as "message-sent" response above
+
+   Notes:
+   - ALL SuperAdmins receive this event (room-based broadcast to "super-admins")
+   - Sender is a TENANT_ADMIN
+   - Use chat.tenantId to identify which conversation this belongs to
+
+2. USER TYPING
+   Event: "user-typing"
+   Payload:
+   {
+     "tenantId": "cuid_tenant_123",
+     "userName": "John Smith",
+     "isTyping": true
+   }
+
+3. ERROR
+   Event: "error"
+   Payload:
+   {
+     "message": "Error description"
+   }
+
+4. MESSAGE SENT CONFIRMATION
+   Event: "message-sent"
+   Payload: Full enriched message object (see above)
+
+5. MESSAGES READ CONFIRMATION
+   Event: "messages-read"
+   Payload: { "chatId": "..." }
+
+================================================================================
+COMPLETE FRONTEND FLOW
+================================================================================
+
+Flow 1: View All Chats
+  1. GET /api/super-admin/all?page=1&limit=20
+  2. Render chat list sorted by lastMessageAt
+  3. Show unreadCount badge per chat
+  4. Click a chat → load history (Flow 2)
+
+Flow 2: Open a Chat
+  1. GET /api/super-admin/history/:tenantId?page=1&limit=50
+  2. Render messages (right-align SUPER_ADMIN, left-align TENANT_ADMIN)
+  3. Connect Socket.IO if not already connected
+  4. Emit "mark-as-read" { chatId } to clear unread count
+  5. Listen for "new-message" events for this chat's tenantId
+
+Flow 3: Send a Message
+  1. User types message
+  2. Emit socket "send-message" { content, tenantId }
+  3. Listen for "message-sent" → append to chat
+  4. Other SuperAdmins also receive "new-message"
+
+Flow 4: Search & Start New Chat
+  1. GET /api/super-admin/search-tenants?search=query
+  2. Show results with hasChat indicator
+  3. hasChat: true → Navigate to existing chat
+  4. hasChat: false → Open empty chat window, send first message via socket
+     (Chat record auto-creates on first message)
+
+Flow 5: Real-time Updates
+  1. Socket connected → auto-joins "super-admins" room
+  2. Listen "new-message" → update chat list + active chat
+  3. Listen "user-typing" → show typing indicator
+  4. Emit "typing" when typing in a chat

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= portalName %> - OTP Verification</title>
+
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      background-color: #F8FAFC;
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+      color: #0F172A;
+    }
+
+    .email-wrapper {
+      width: 100%;
+      padding: 20px 0;
+      background-color: #F8FAFC;
+    }
+
+    .email-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #FFFFFF;
+      border-radius: 16px;
+      box-shadow: 0 6px 16px rgba(0, 151, 254, 0.1);
+      overflow: hidden;
+    }
+
+    .email-header {
+      background: linear-gradient(83.79deg, #1B45B4 3.25%, #1C2792 96.85%);
+      color: #FFFFFF;
+      text-align: center;
+      padding: 24px 16px;
+    }
+
+    .email-header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+    }
+
+    .email-body {
+      padding: 32px 28px;
+    }
+
+    .email-body p {
+      font-size: 15px;
+      line-height: 1.7;
+      margin: 0 0 14px;
+      color: #0F172A;
+    }
+
+    .email-body p.muted {
+      color: #475569;
+      font-size: 14px;
+    }
+
+    .otp-box {
+      background: linear-gradient(90deg, #5433FF 0%, #20BDFF 50%, #A5FECB 100%);
+      color: #FFFFFF;
+      font-size: 28px;
+      font-weight: bold;
+      letter-spacing: 6px;
+      text-align: center;
+      border-radius: 10px;
+      padding: 16px 0;
+      margin: 24px 0;
+    }
+
+    .verify-btn {
+      display: inline-block;
+      background-color: #0097FE;
+      color: #FFFFFF;
+      text-decoration: none;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 15px;
+      margin-top: 10px;
+    }
+
+    .email-footer {
+      text-align: center;
+      background-color: #F8FAFC;
+      padding: 20px;
+      font-size: 13px;
+      color: #475569;
+      border-top: 1px solid rgba(0,151,254,0.1);
+    }
+
+    .email-footer a {
+      color: #0097FE;
+      text-decoration: none;
+    }
+
+    @media only screen and (max-width: 600px) {
+      .email-body {
+        padding: 24px 18px;
+      }
+
+      .otp-box {
+        font-size: 22px;
+        letter-spacing: 4px;
+      }
+
+      .verify-btn {
+        font-size: 14px;
+        padding: 10px 22px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="email-wrapper">
+    <div class="email-container">
+
+      <!-- HEADER -->
+      <div class="email-header">
+        <h1><%= portalName %></h1>
+      </div>
+
+      <!-- BODY -->
+      <div class="email-body">
+        <p>Hi <strong><%= firstName %> <%= lastName %></strong>,</p>
+
+        <p>
+          Thank you for signing up with <strong><%= portalName %></strong>.
+        </p>
+
+        <p>To complete your registration, please verify your email address using the OTP below:</p>
+
+        <div class="otp-box"><%= otp %></div>
+
+        <p class="muted">This OTP will expire in <%= expiryMinutes %> minutes.</p>
+
+        <p>If you did not initiate this request, please ignore this email. No further action is required.</p>
+
+        <p style="margin-top: 24px;">
+          <a href="#" class="verify-btn">Verify Email</a>
+        </p>
+
+        <p style="margin-top: 32px;">
+          Best regards,<br />
+          <strong>Team <%= portalName %></strong>
+        </p>
+      </div>
+
+      <!-- FOOTER -->
+      <div class="email-footer">
+        <p>&copy; <%= new Date().getFullYear() %> OPERNOVA TECHNOLOGIES LLP. All rights reserved.</p>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

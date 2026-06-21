@@ -1,0 +1,1110 @@
+================================================================================
+TASK MANAGEMENT API - STARTUP PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-03
+Base URL: /api/startup-portal
+
+Authentication: User Bearer Token (authenticate middleware)
+Note: User must be a member of the startup (have active StartupMember record)
+
+================================================================================
+TASK MODULE FLOW
+================================================================================
+
+The Task module allows startups to manage internal tasks for their team members.
+Tasks can be assigned to startup members, tracked through various statuses, and
+include subtasks, comments, and file attachments.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          STARTUP TASK MANAGEMENT                              │
+│                     Base: /api/startup-portal                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  • Creates and manages internal startup tasks                                 │
+│  • Assigns tasks to startup team members (founders, co-founders, employees)   │
+│  • Tracks task status through PENDING → IN_PROGRESS → COMPLETED               │
+│  • Supports subtasks, comments, and file attachments                          │
+│  • Activity logging for audit trail                                           │
+│  • Dashboard with statistics and overdue tracking                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+ACCESS CONTROL:
+--------------------------------------------------------------------------------
+
+Only startup members can access tasks:
+  • User must have an active StartupMember record for the startup
+  • All CRUD operations require membership verification
+  • Users can only see/edit tasks within their startup
+
+TASK LIFECYCLE:
+--------------------------------------------------------------------------------
+
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   PENDING    │────▶│ IN_PROGRESS  │────▶│  IN_REVIEW   │────▶│  COMPLETED   │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+       │                    │                    │
+       │                    ▼                    │
+       │             ┌──────────────┐            │
+       └────────────▶│   BLOCKED    │◀───────────┘
+                     └──────────────┘
+
+Status Meanings:
+  • PENDING      → Task created, not started
+  • IN_PROGRESS  → Work has begun
+  • IN_REVIEW    → Work done, awaiting review
+  • BLOCKED      → Cannot proceed due to dependency/issue
+  • COMPLETED    → Task finished
+
+TYPICAL WORKFLOW:
+--------------------------------------------------------------------------------
+
+Step 1: Create Task
+─────────────────────────────────────────────────────────────────────────────
+POST /api/startup-portal/startup/:startupId/task
+
+→ Create task with title, description, priority, due date
+→ Optionally assign to a team member
+→ Returns task with status "PENDING"
+
+Step 2: Assign Task (if not assigned during creation)
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/startup-portal/startup/:startupId/task/:taskId/assign
+
+→ Assign task to a startup member
+→ Activity logged
+
+Step 3: Add Subtasks (Optional)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/startup-portal/startup/:startupId/task/:taskId/subtask
+
+→ Break down task into smaller checklist items
+→ Each subtask can be toggled complete/incomplete
+
+Step 4: Update Status as Work Progresses
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/startup-portal/startup/:startupId/task/:taskId/status
+
+→ Move task through: PENDING → IN_PROGRESS → IN_REVIEW → COMPLETED
+→ All status changes logged in activity
+
+Step 5: Add Comments (Collaboration)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/startup-portal/startup/:startupId/task/:taskId/comment
+
+→ Team members can discuss task
+→ Comments are logged in activity
+
+Step 6: Attach Files (Optional)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/startup-portal/startup/:startupId/task/:taskId/attachment
+
+→ Upload supporting documents
+→ Files stored in S3
+
+Step 7: Complete Task
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/startup-portal/startup/:startupId/task/:taskId/status { "status": "COMPLETED" }
+
+→ Task marked complete
+→ completedAt timestamp recorded
+
+
+FLOW DIAGRAM - TASK CREATION TO COMPLETION:
+--------------------------------------------------------------------------------
+
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Create Task    │────▶│  Assign Task    │────▶│  Add Subtasks   │
+│  POST /task     │     │ PATCH /assign   │     │ POST /subtask   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                    ┌───────────────────────────────────┘
+                    ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ Update Status   │────▶│  Add Comments   │────▶│ Attach Files    │
+│ PATCH /status   │     │ POST /comment   │     │ POST /attachment│
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                    ┌───────────────────────────────────┘
+                    ▼
+            ┌─────────────────┐
+            │  Complete Task  │
+            │ PATCH /status   │
+            │ COMPLETED       │
+            └─────────────────┘
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+Note: All endpoints are prefixed with /startup/:startupId
+
+# TASK CRUD
+| Endpoint                                      | Method | Purpose                            |
+|-----------------------------------------------|--------|------------------------------------|
+| /startup/:startupId/task                      | POST   | Create new task                    |
+| /startup/:startupId/tasks                     | GET    | List all tasks (paginated)         |
+| /startup/:startupId/task/:taskId              | GET    | Get task details                   |
+| /startup/:startupId/task/:taskId              | PUT    | Update task                        |
+| /startup/:startupId/task/:taskId              | DELETE | Archive task                       |
+
+# TASK STATUS & ASSIGNMENT
+| Endpoint                                      | Method | Purpose                            |
+|-----------------------------------------------|--------|------------------------------------|
+| /startup/:startupId/task/:taskId/status       | PATCH  | Update task status                 |
+| /startup/:startupId/task/:taskId/assign       | PATCH  | Assign/unassign task               |
+
+# TASK VIEWS & FILTERS
+| Endpoint                                      | Method | Purpose                            |
+|-----------------------------------------------|--------|------------------------------------|
+| /startup/:startupId/tasks/my-tasks            | GET    | Get tasks assigned to me           |
+| /startup/:startupId/tasks/created-by-me       | GET    | Get tasks I created                |
+| /startup/:startupId/tasks/overdue             | GET    | Get overdue tasks                  |
+| /startup/:startupId/tasks/stats               | GET    | Get task statistics                |
+| /startup/:startupId/tasks/team-members        | GET    | Get assignable team members        |
+
+# SUBTASKS
+| Endpoint                                                  | Method | Purpose                    |
+|-----------------------------------------------------------|--------|----------------------------|
+| /startup/:startupId/task/:taskId/subtask                  | POST   | Add subtask                |
+| /startup/:startupId/task/:taskId/subtask/:subtaskId       | PUT    | Update subtask             |
+| /startup/:startupId/task/:taskId/subtask/:subtaskId/toggle| PATCH  | Toggle subtask complete    |
+| /startup/:startupId/task/:taskId/subtask/:subtaskId       | DELETE | Remove subtask             |
+| /startup/:startupId/task/:taskId/subtasks/reorder         | PATCH  | Reorder subtasks           |
+
+# ATTACHMENTS
+| Endpoint                                                          | Method | Purpose            |
+|-------------------------------------------------------------------|--------|--------------------|
+| /startup/:startupId/task/:taskId/attachment                       | POST   | Add attachment     |
+| /startup/:startupId/task/:taskId/attachment/:attachmentId         | DELETE | Remove attachment  |
+
+# COMMENTS
+| Endpoint                                                  | Method | Purpose                    |
+|-----------------------------------------------------------|--------|----------------------------|
+| /startup/:startupId/task/:taskId/comment                  | POST   | Add comment                |
+| /startup/:startupId/task/:taskId/comment/:commentId       | PUT    | Update comment             |
+| /startup/:startupId/task/:taskId/comment/:commentId       | DELETE | Delete comment             |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+TaskStatus:
+- PENDING       (Not started)
+- IN_PROGRESS   (Work in progress)
+- IN_REVIEW     (Awaiting review)
+- BLOCKED       (Cannot proceed)
+- COMPLETED     (Done)
+
+PriorityLevel:
+- LOW
+- MEDIUM
+- HIGH
+- URGENT
+
+TeamType:
+- INCUBATION    (Incubation center tasks)
+- STARTUP       (Startup tasks)
+
+TaskActivityAction:
+- CREATED
+- UPDATED
+- STATUS_CHANGED
+- ASSIGNED
+- COMMENTED
+- ATTACHMENT_ADDED
+- ATTACHMENT_REMOVED
+- SUBTASK_ADDED
+- SUBTASK_COMPLETED
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 5
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. TASK CRUD OPERATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 CREATE TASK
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task
+Auth: User Token Required
+
+Purpose: Create a new task for the startup team.
+
+Request Body:
+{
+  "title": "Build MVP landing page",
+  "description": "Create responsive landing page with email signup form",
+  "priority": "HIGH",
+  "assigneeId": "cuid_user_123",
+  "dueDate": "2026-02-15",
+  "startDate": "2026-02-01",
+  "labels": ["mvp", "frontend", "launch"]
+}
+
+Field Details:
+- title (string, required): Task title
+- description (string, optional): Detailed description
+- priority (enum, optional): LOW | MEDIUM | HIGH | URGENT (default: MEDIUM)
+- assigneeId (string, optional): User ID of startup member to assign
+- dueDate (string, optional): ISO date string
+- startDate (string, optional): ISO date string
+- labels (array, optional): String tags for categorization
+
+Response (201):
+{
+  "success": true,
+  "message": "Task created",
+  "data": {
+    "id": "cuid_task_123",
+    "title": "Build MVP landing page",
+    "description": "Create responsive landing page with email signup form",
+    "priority": "HIGH",
+    "status": "PENDING",
+    "teamType": "STARTUP",
+    "teamId": "cuid_startup_456",
+    "creatorId": "cuid_user_789",
+    "assigneeId": "cuid_user_123",
+    "dueDate": "2026-02-15T00:00:00.000Z",
+    "startDate": "2026-02-01T00:00:00.000Z",
+    "completedAt": null,
+    "labels": ["mvp", "frontend", "launch"],
+    "orderIndex": 0,
+    "isArchived": false,
+    "createdAt": "2026-02-03T10:00:00.000Z",
+    "updatedAt": "2026-02-03T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET ALL TASKS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/tasks
+Auth: User Token Required
+
+Purpose: List all tasks for the startup with pagination and filters.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): PENDING | IN_PROGRESS | IN_REVIEW | BLOCKED | COMPLETED
+- priority (enum): LOW | MEDIUM | HIGH | URGENT
+- assigneeId (string): Filter by assigned user
+- label (string): Filter by label
+- search (string): Search in title and description
+- fromDate (string): Filter by due date range start
+- toDate (string): Filter by due date range end
+- isOverdue ("true"): Get only overdue tasks
+
+Example: ?status=IN_PROGRESS&priority=HIGH&label=mvp
+
+Response (200):
+{
+  "success": true,
+  "message": "Tasks fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_task_123",
+        "title": "Build MVP landing page",
+        "description": "...",
+        "priority": "HIGH",
+        "status": "IN_PROGRESS",
+        "creatorId": "cuid_user_789",
+        "assigneeId": "cuid_user_123",
+        "dueDate": "2026-02-15T00:00:00.000Z",
+        "labels": ["mvp", "frontend", "launch"],
+        "subtasks": [
+          { "id": "...", "title": "Design mockup", "isCompleted": true },
+          { "id": "...", "title": "Implement HTML/CSS", "isCompleted": false }
+        ],
+        "_count": {
+          "comments": 3,
+          "attachments": 1
+        }
+      }
+    ],
+    "total": 15,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET TASK BY ID
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId
+Auth: User Token Required
+
+Purpose: Get complete task details including subtasks, attachments, comments, and activity.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task details",
+  "data": {
+    "id": "cuid_task_123",
+    "title": "Build MVP landing page",
+    "description": "Create responsive landing page with email signup form",
+    "priority": "HIGH",
+    "status": "IN_PROGRESS",
+    "teamType": "STARTUP",
+    "teamId": "cuid_startup_456",
+    "creatorId": "cuid_user_789",
+    "assigneeId": "cuid_user_123",
+    "dueDate": "2026-02-15T00:00:00.000Z",
+    "startDate": "2026-02-01T00:00:00.000Z",
+    "completedAt": null,
+    "labels": ["mvp", "frontend", "launch"],
+    "subtasks": [
+      {
+        "id": "cuid_subtask_1",
+        "title": "Design mockup",
+        "isCompleted": true,
+        "completedAt": "2026-02-02T14:00:00.000Z",
+        "completedById": "cuid_user_123",
+        "orderIndex": 0
+      },
+      {
+        "id": "cuid_subtask_2",
+        "title": "Implement HTML/CSS",
+        "isCompleted": false,
+        "completedAt": null,
+        "orderIndex": 1
+      }
+    ],
+    "attachments": [
+      {
+        "id": "cuid_attachment_1",
+        "fileName": "mockup.figma",
+        "fileUrl": "https://...",
+        "fileType": "application/octet-stream",
+        "fileSize": 1245000,
+        "uploadedById": "cuid_user_123",
+        "createdAt": "2026-02-01T10:00:00.000Z"
+      }
+    ],
+    "comments": [
+      {
+        "id": "cuid_comment_1",
+        "authorId": "cuid_user_789",
+        "content": "Looking great! Can we add a dark mode toggle?",
+        "createdAt": "2026-02-02T15:00:00.000Z",
+        "updatedAt": "2026-02-02T15:00:00.000Z"
+      }
+    ],
+    "activities": [
+      {
+        "id": "cuid_activity_1",
+        "actorId": "cuid_user_789",
+        "action": "CREATED",
+        "field": null,
+        "oldValue": null,
+        "newValue": null,
+        "createdAt": "2026-02-01T09:00:00.000Z"
+      },
+      {
+        "id": "cuid_activity_2",
+        "actorId": "cuid_user_123",
+        "action": "STATUS_CHANGED",
+        "field": "status",
+        "oldValue": "PENDING",
+        "newValue": "IN_PROGRESS",
+        "createdAt": "2026-02-01T10:00:00.000Z"
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 UPDATE TASK
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId
+Auth: User Token Required
+
+Purpose: Update task properties (title, description, priority, dates, labels).
+
+Request Body:
+{
+  "title": "Build MVP landing page v2",
+  "priority": "URGENT",
+  "dueDate": "2026-02-10",
+  "labels": ["mvp", "frontend", "launch", "urgent"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Task updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+1.5 ARCHIVE TASK
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId
+Auth: User Token Required
+
+Purpose: Archive a task (soft delete). Task is hidden from lists but not deleted.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task archived",
+  "data": {
+    "id": "cuid_task_123",
+    "isArchived": true
+  }
+}
+
+================================================================================
+2. TASK STATUS & ASSIGNMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 UPDATE TASK STATUS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/status
+Auth: User Token Required
+
+Purpose: Update task status. When set to COMPLETED, completedAt is recorded.
+
+Request Body:
+{
+  "status": "COMPLETED"
+}
+
+Valid Statuses: PENDING | IN_PROGRESS | IN_REVIEW | BLOCKED | COMPLETED
+
+Response (200):
+{
+  "success": true,
+  "message": "Task status updated",
+  "data": {
+    "id": "cuid_task_123",
+    "status": "COMPLETED",
+    "completedAt": "2026-02-03T16:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+2.2 ASSIGN TASK
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/assign
+Auth: User Token Required
+
+Purpose: Assign task to a startup member. Pass null to unassign.
+
+Request Body:
+{
+  "assigneeId": "cuid_user_123"
+}
+
+To unassign:
+{
+  "assigneeId": null
+}
+
+Note: assigneeId must be a user who is an active member of the startup.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task assigned",
+  "data": {
+    "id": "cuid_task_123",
+    "assigneeId": "cuid_user_123"
+  }
+}
+
+================================================================================
+3. TASK VIEWS & FILTERS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 GET MY TASKS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/tasks/my-tasks
+Auth: User Token Required
+
+Purpose: Get tasks assigned to the current user in this startup.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): Filter by status
+
+Response (200):
+{
+  "success": true,
+  "message": "My tasks fetched",
+  "data": {
+    "data": [...],
+    "total": 8,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 GET TASKS CREATED BY ME
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/tasks/created-by-me
+Auth: User Token Required
+
+Purpose: Get tasks created by the current user in this startup.
+
+Query Parameters: Same as GET MY TASKS
+
+Response (200):
+{
+  "success": true,
+  "message": "Created tasks fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+3.3 GET OVERDUE TASKS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/tasks/overdue
+Auth: User Token Required
+
+Purpose: Get tasks that are past due date and not completed.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Response (200):
+{
+  "success": true,
+  "message": "Overdue tasks fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_task_456",
+        "title": "Submit investor pitch deck",
+        "dueDate": "2026-01-31T00:00:00.000Z",
+        "status": "IN_PROGRESS",
+        "priority": "URGENT"
+      }
+    ],
+    "total": 2,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 GET TASK STATISTICS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/tasks/stats
+Auth: User Token Required
+
+Purpose: Get task statistics for the startup dashboard.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task statistics",
+  "data": {
+    "byStatus": {
+      "PENDING": 3,
+      "IN_PROGRESS": 8,
+      "IN_REVIEW": 2,
+      "BLOCKED": 0,
+      "COMPLETED": 25
+    },
+    "byPriority": {
+      "LOW": 5,
+      "MEDIUM": 20,
+      "HIGH": 10,
+      "URGENT": 3
+    },
+    "overdue": 2
+  }
+}
+
+--------------------------------------------------------------------------------
+3.5 GET TEAM MEMBERS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/tasks/team-members
+Auth: User Token Required
+
+Purpose: Get list of startup members who can be assigned tasks.
+
+Response (200):
+{
+  "success": true,
+  "message": "Team members fetched",
+  "data": [
+    {
+      "id": "cuid_member_1",
+      "role": "FOUNDER",
+      "title": "CEO",
+      "isAdmin": true,
+      "user": {
+        "id": "cuid_user_123",
+        "firstName": "Alex",
+        "lastName": "Chen",
+        "email": "alex@startup.com",
+        "profilePhoto": "https://..."
+      }
+    },
+    {
+      "id": "cuid_member_2",
+      "role": "CO_FOUNDER",
+      "title": "CTO",
+      "isAdmin": true,
+      "user": {
+        "id": "cuid_user_456",
+        "firstName": "Sarah",
+        "lastName": "Kim",
+        "email": "sarah@startup.com",
+        "profilePhoto": "https://..."
+      }
+    },
+    {
+      "id": "cuid_member_3",
+      "role": "EMPLOYEE",
+      "title": "Full Stack Developer",
+      "isAdmin": false,
+      "user": {
+        "id": "cuid_user_789",
+        "firstName": "Mike",
+        "lastName": "Johnson",
+        "email": "mike@startup.com",
+        "profilePhoto": null
+      }
+    }
+  ]
+}
+
+================================================================================
+4. SUBTASKS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 ADD SUBTASK
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/subtask
+Auth: User Token Required
+
+Purpose: Add a checklist item to a task.
+
+Request Body:
+{
+  "title": "Design hero section"
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Subtask added",
+  "data": {
+    "id": "cuid_subtask_1",
+    "taskId": "cuid_task_123",
+    "title": "Design hero section",
+    "isCompleted": false,
+    "completedAt": null,
+    "completedById": null,
+    "orderIndex": 0
+  }
+}
+
+--------------------------------------------------------------------------------
+4.2 UPDATE SUBTASK
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/subtask/:subtaskId
+Auth: User Token Required
+
+Purpose: Update subtask title.
+
+Request Body:
+{
+  "title": "Design hero section with video background"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtask updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+4.3 TOGGLE SUBTASK
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/subtask/:subtaskId/toggle
+Auth: User Token Required
+
+Purpose: Toggle subtask completion status.
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtask toggled",
+  "data": {
+    "id": "cuid_subtask_1",
+    "isCompleted": true,
+    "completedAt": "2026-02-03T14:00:00.000Z",
+    "completedById": "cuid_user_123"
+  }
+}
+
+--------------------------------------------------------------------------------
+4.4 REMOVE SUBTASK
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/subtask/:subtaskId
+Auth: User Token Required
+
+Purpose: Delete a subtask.
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtask removed",
+  "data": {
+    "message": "Subtask removed"
+  }
+}
+
+--------------------------------------------------------------------------------
+4.5 REORDER SUBTASKS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/subtasks/reorder
+Auth: User Token Required
+
+Purpose: Reorder subtasks (for drag-and-drop UI).
+
+Request Body:
+{
+  "subtaskIds": ["cuid_subtask_3", "cuid_subtask_1", "cuid_subtask_2"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtasks reordered",
+  "data": {
+    "message": "Subtasks reordered"
+  }
+}
+
+================================================================================
+5. ATTACHMENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 ADD ATTACHMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/attachment
+Auth: User Token Required
+
+Purpose: Add file attachment to task (file already uploaded to S3).
+
+Request Body:
+{
+  "fileName": "wireframe.pdf",
+  "fileUrl": "https://bucket.s3.region.amazonaws.com/path/wireframe.pdf",
+  "fileKey": "path/wireframe.pdf",
+  "fileType": "application/pdf",
+  "fileSize": 845000
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Attachment added",
+  "data": {
+    "id": "cuid_attachment_1",
+    "taskId": "cuid_task_123",
+    "fileName": "wireframe.pdf",
+    "fileUrl": "https://...",
+    "fileKey": "path/wireframe.pdf",
+    "fileType": "application/pdf",
+    "fileSize": 845000,
+    "uploadedById": "cuid_user_123",
+    "createdAt": "2026-02-03T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 REMOVE ATTACHMENT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/attachment/:attachmentId
+Auth: User Token Required
+
+Purpose: Remove attachment from task and delete from S3.
+
+Response (200):
+{
+  "success": true,
+  "message": "Attachment removed",
+  "data": {
+    "message": "Attachment removed"
+  }
+}
+
+================================================================================
+6. COMMENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 ADD COMMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/comment
+Auth: User Token Required
+
+Purpose: Add comment to task for team collaboration.
+
+Request Body:
+{
+  "content": "The mockup is ready for review. Please check the Figma link."
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Comment added",
+  "data": {
+    "id": "cuid_comment_1",
+    "taskId": "cuid_task_123",
+    "authorId": "cuid_user_123",
+    "content": "The mockup is ready for review. Please check the Figma link.",
+    "createdAt": "2026-02-03T14:00:00.000Z",
+    "updatedAt": "2026-02-03T14:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+6.2 UPDATE COMMENT
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/comment/:commentId
+Auth: User Token Required
+
+Purpose: Update own comment. Can only edit comments you authored.
+
+Request Body:
+{
+  "content": "The mockup is ready for review. Here's the Figma link: https://figma.com/..."
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Comment updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+6.3 DELETE COMMENT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/startup-portal/startup/:startupId/task/:taskId/comment/:commentId
+Auth: User Token Required
+
+Purpose: Delete own comment. Can only delete comments you authored.
+
+Response (200):
+{
+  "success": true,
+  "message": "Comment deleted",
+  "data": {
+    "message": "Comment deleted"
+  }
+}
+
+================================================================================
+COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Founder Creates Task for Developer
+--------------------------------------------------------------------------------
+
+Step 1: Get team members for assignment
+GET /api/startup-portal/startup/cuid_startup_123/tasks/team-members
+
+Step 2: Create task
+POST /api/startup-portal/startup/cuid_startup_123/task
+Body: {
+  "title": "Implement user authentication",
+  "description": "Add OAuth login with Google and email/password auth",
+  "priority": "HIGH",
+  "assigneeId": "cuid_user_developer",
+  "dueDate": "2026-02-20",
+  "labels": ["backend", "auth", "mvp"]
+}
+
+Step 3: Add subtasks
+POST /api/startup-portal/startup/cuid_startup_123/task/:taskId/subtask
+Body: { "title": "Setup OAuth credentials" }
+POST /api/startup-portal/startup/cuid_startup_123/task/:taskId/subtask
+Body: { "title": "Implement login flow" }
+POST /api/startup-portal/startup/cuid_startup_123/task/:taskId/subtask
+Body: { "title": "Add session management" }
+POST /api/startup-portal/startup/cuid_startup_123/task/:taskId/subtask
+Body: { "title": "Write tests" }
+
+
+EXAMPLE 2: Developer Works on Assigned Task
+--------------------------------------------------------------------------------
+
+Step 1: View my tasks
+GET /api/startup-portal/startup/cuid_startup_123/tasks/my-tasks
+
+Step 2: Start working on task
+PATCH /api/startup-portal/startup/cuid_startup_123/task/:taskId/status
+Body: { "status": "IN_PROGRESS" }
+
+Step 3: Complete subtasks as you go
+PATCH /api/startup-portal/startup/cuid_startup_123/task/:taskId/subtask/:subtaskId/toggle
+
+Step 4: Add progress comment
+POST /api/startup-portal/startup/cuid_startup_123/task/:taskId/comment
+Body: { "content": "OAuth with Google is working. Starting on email/password now." }
+
+Step 5: Attach relevant docs
+POST /api/startup-portal/startup/cuid_startup_123/task/:taskId/attachment
+Body: { "fileName": "auth_flow.png", "fileUrl": "...", "fileKey": "...", ... }
+
+Step 6: Move to review
+PATCH /api/startup-portal/startup/cuid_startup_123/task/:taskId/status
+Body: { "status": "IN_REVIEW" }
+
+
+EXAMPLE 3: Startup Dashboard View
+--------------------------------------------------------------------------------
+
+Step 1: Get statistics
+GET /api/startup-portal/startup/cuid_startup_123/tasks/stats
+
+Step 2: Get overdue tasks (urgent attention needed)
+GET /api/startup-portal/startup/cuid_startup_123/tasks/overdue
+
+Step 3: Get high priority tasks in progress
+GET /api/startup-portal/startup/cuid_startup_123/tasks?priority=HIGH&status=IN_PROGRESS
+
+Step 4: Get all pending tasks
+GET /api/startup-portal/startup/cuid_startup_123/tasks?status=PENDING
+
+
+EXAMPLE 4: Sprint Planning - Bulk Task Creation
+--------------------------------------------------------------------------------
+
+POST /api/startup-portal/startup/cuid_startup_123/task
+Body: { "title": "Design database schema", "priority": "HIGH", "dueDate": "2026-02-05" }
+
+POST /api/startup-portal/startup/cuid_startup_123/task
+Body: { "title": "Setup CI/CD pipeline", "priority": "MEDIUM", "dueDate": "2026-02-07" }
+
+POST /api/startup-portal/startup/cuid_startup_123/task
+Body: { "title": "Create API documentation", "priority": "LOW", "dueDate": "2026-02-15" }
+
+POST /api/startup-portal/startup/cuid_startup_123/task
+Body: { "title": "Performance testing", "priority": "MEDIUM", "dueDate": "2026-02-18" }
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                    API TO USE
+--------------------------------------------------------------------------------
+"Create a new task"                         POST /startup/:id/task
+"See all startup tasks"                     GET /startup/:id/tasks
+"See task details"                          GET /startup/:id/task/:taskId
+"Update task title/description"             PUT /startup/:id/task/:taskId
+"Change task status"                        PATCH /startup/:id/task/:taskId/status
+"Assign task to someone"                    PATCH /startup/:id/task/:taskId/assign
+"See tasks assigned to me"                  GET /startup/:id/tasks/my-tasks
+"See tasks I created"                       GET /startup/:id/tasks/created-by-me
+"See overdue tasks"                         GET /startup/:id/tasks/overdue
+"Get dashboard statistics"                  GET /startup/:id/tasks/stats
+"See who I can assign tasks to"             GET /startup/:id/tasks/team-members
+"Add a checklist item"                      POST /startup/:id/task/:taskId/subtask
+"Mark checklist item done"                  PATCH /startup/:id/task/:taskId/subtask/:sId/toggle
+"Add a comment"                             POST /startup/:id/task/:taskId/comment
+"Attach a file"                             POST /startup/:id/task/:taskId/attachment
+"Archive/delete a task"                     DELETE /startup/:id/task/:taskId
+
+================================================================================
+ACCESS CONTROL SUMMARY
+================================================================================
+
+Who can access startup tasks?
+  • Only active members of the startup (StartupMember with isActive=true)
+  • Founder, co-founders, and employees with active membership
+
+Who can be assigned tasks?
+  • Only users who are active members of the startup
+  • Use GET /tasks/team-members to see assignable users
+
+Who can edit/delete comments?
+  • Only the author of the comment
+
+Who can remove attachments?
+  • Any member can remove any attachment (consider implementing ownership check)
+
+================================================================================
+END OF STARTUP TASK API DOCUMENTATION
+================================================================================

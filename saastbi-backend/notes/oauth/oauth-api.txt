@@ -1,0 +1,721 @@
+================================================================================
+ECOSYSTEM (USER) -- SOCIAL OAUTH API DOCUMENTATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-25
+Base URL: /api/ecosystem
+
+Authentication: None required for login/signup endpoints.
+               User Bearer Token required for account linking endpoints.
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+The Ecosystem OAuth system supports social login with three providers:
+
+1. GOOGLE     -- Login/signup via Google ID token (from Google Identity Services)
+2. FACEBOOK   -- Login/signup via Facebook access token (from Facebook Login SDK)
+3. APPLE      -- Login/signup via Apple identity token (from Sign in with Apple)
+
+Key Concepts:
+- Frontend handles the provider consent screen and obtains the token
+- Frontend sends that token to the backend for server-side verification
+- Backend verifies the token directly with the provider (never trusts client data)
+- If the user exists (matched by email), the provider is linked automatically
+- If the user is new, an account is created with emailVerified: true
+- Users can link multiple providers to one account
+- Users can unlink a provider (as long as they have a password or another provider)
+- OAuth users have no password by default; they can set one via "Forgot Password"
+
+Token Flow (same for all three providers):
+  1. Frontend shows provider consent screen (Google One Tap, FB Login, Apple)
+  2. User authenticates with the provider
+  3. Frontend receives a token from the provider SDK
+  4. Frontend sends that token to POST /auth/google or /auth/facebook or /auth/apple
+  5. Backend verifies the token server-side with the provider
+  6. Backend returns accessToken + refreshToken + user object
+  7. Frontend stores tokens and proceeds normally
+
+================================================================================
+DATA MODELS
+================================================================================
+
+LinkedAccount (stored per user, per provider):
+  - id: string (cuid)
+  - userId: string (references User)
+  - provider: string ("google" | "facebook" | "apple")
+  - providerAccountId: string (unique ID from the provider)
+  - email: string | null (email from the provider)
+  - displayName: string | null
+  - profilePhoto: string | null
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+User fields relevant to OAuth:
+  - passwordHash: string | null (null for OAuth-only users)
+  - provider: string (default: "local", set to provider name for OAuth signups)
+  - emailVerified: boolean (always true for OAuth users)
+  - profileCurrentStage: number (1 for new OAuth users -- email verified)
+
+================================================================================
+API QUICK REFERENCE
+================================================================================
+
+# SOCIAL LOGIN/SIGNUP (No Auth Required)
+| Endpoint                  | Method | Purpose                                  |
+|---------------------------|--------|------------------------------------------|
+| /auth/google              | POST   | Login or signup with Google               |
+| /auth/facebook            | POST   | Login or signup with Facebook             |
+| /auth/apple               | POST   | Login or signup with Apple                |
+
+# ACCOUNT LINKING (Auth Required)
+| Endpoint                  | Method | Purpose                                  |
+|---------------------------|--------|------------------------------------------|
+| /auth/linked-accounts     | GET    | List all linked social accounts          |
+| /auth/link/:provider      | POST   | Link a new social provider               |
+| /auth/link/:provider      | DELETE | Unlink a social provider                 |
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response (login/signup):
+{
+  "success": true,
+  "status": 200,
+  "message": "Google authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
+    "user": {
+      "id": "cuid_user_123",
+      "username": "johndoe4821",
+      "email": "john@gmail.com",
+      "firstName": "John",
+      "lastName": "Doe",
+      "profilePhoto": "https://lh3.googleusercontent.com/...",
+      "profileCurrentStage": 1,
+      "isActive": true,
+      "isPremium": false,
+      "emailVerified": true,
+      "provider": "google"
+    },
+    "isNewUser": true
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "status": 401,
+  "message": "Invalid or expired Google token",
+  "data": null
+}
+
+================================================================================
+1. LOGIN/SIGNUP WITH GOOGLE
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/auth/google
+Auth: Not Required
+
+Purpose: Authenticate a user with their Google account. If the user is new, an
+account is created. If the user already exists (matched by email), their Google
+account is linked automatically.
+
+Request Body:
+{
+  "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6..."    // REQUIRED -- Google ID token
+}
+
+How to get the idToken on frontend:
+- Google Identity Services (One Tap): credential.credential from the callback
+- Google Sign-In button: the credential response contains the ID token
+- React: use @react-oauth/google library, the credentialResponse.credential
+
+Response (200 -- Existing User):
+{
+  "success": true,
+  "status": 200,
+  "message": "Google authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "eyJhbGciOi...",
+    "user": {
+      "id": "cuid_user_123",
+      "username": "johndoe",
+      "email": "john@gmail.com",
+      "firstName": "John",
+      "lastName": "Doe",
+      "profilePhoto": "https://lh3.googleusercontent.com/photo.jpg",
+      "profileCurrentStage": 3,
+      "isActive": true,
+      "isPremium": false,
+      "emailVerified": true,
+      "provider": "local"
+    },
+    "isNewUser": false
+  }
+}
+
+Response (200 -- New User):
+{
+  "success": true,
+  "status": 200,
+  "message": "Google authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "eyJhbGciOi...",
+    "user": {
+      "id": "cuid_user_new",
+      "username": "johndoe4821",
+      "email": "john@gmail.com",
+      "firstName": "John",
+      "lastName": "Doe",
+      "profilePhoto": "https://lh3.googleusercontent.com/photo.jpg",
+      "profileCurrentStage": 1,
+      "isActive": true,
+      "isPremium": false,
+      "emailVerified": true,
+      "provider": "google"
+    },
+    "isNewUser": true
+  }
+}
+
+Error (400):
+{
+  "success": false,
+  "message": "Google ID token is required"
+}
+
+Error (401):
+{
+  "success": false,
+  "message": "Invalid or expired Google token"
+}
+
+Error (401 -- email not verified on Google side):
+{
+  "success": false,
+  "message": "Google email is not verified"
+}
+
+Error (403 -- deactivated account):
+{
+  "success": false,
+  "message": "Your account has been deactivated"
+}
+
+Cookies Set:
+- accessToken (httpOnly, secure in production, sameSite: strict, 15 min)
+- refreshToken (httpOnly, secure in production, sameSite: strict, 7 days)
+
+Frontend Notes:
+- isNewUser: true means the user just created an account via Google
+- When isNewUser: true, profileCurrentStage will be 1 (email verified)
+  The user still needs to: set username (stage 2) and select role (stage 3)
+  Redirect them to the onboarding flow at the appropriate step
+- When isNewUser: false, check profileCurrentStage to determine where they are
+- The user's Google profile photo is saved as profilePhoto
+- Both cookies AND response body contain the tokens (use whichever fits your setup)
+
+================================================================================
+2. LOGIN/SIGNUP WITH FACEBOOK
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/auth/facebook
+Auth: Not Required
+
+Purpose: Authenticate a user with their Facebook account. Same behavior as
+Google: creates account if new, links if existing email found.
+
+Request Body:
+{
+  "accessToken": "EAAGm0PX4ZCps..."    // REQUIRED -- Facebook user access token
+}
+
+How to get the accessToken on frontend:
+- Facebook Login SDK: FB.login() response -> response.authResponse.accessToken
+- React: use react-facebook-login or @greatsumini/react-facebook-login
+- The token comes from the Facebook Login dialog callback
+
+Response (200 -- Existing User):
+{
+  "success": true,
+  "status": 200,
+  "message": "Facebook authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "eyJhbGciOi...",
+    "user": {
+      "id": "cuid_user_123",
+      "username": "johndoe",
+      "email": "john@gmail.com",
+      "firstName": "John",
+      "lastName": "Doe",
+      "profilePhoto": "https://platform-lookaside.fbsbx.com/...",
+      "profileCurrentStage": 3,
+      "isActive": true,
+      "isPremium": false,
+      "emailVerified": true,
+      "provider": "local"
+    },
+    "isNewUser": false
+  }
+}
+
+Response (200 -- New User):
+{
+  "success": true,
+  "status": 200,
+  "message": "Facebook authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "eyJhbGciOi...",
+    "user": {
+      "id": "cuid_user_new",
+      "username": "johndoe7391",
+      "email": "john@gmail.com",
+      "firstName": "John",
+      "lastName": "Doe",
+      "profilePhoto": "https://platform-lookaside.fbsbx.com/...",
+      "profileCurrentStage": 1,
+      "isActive": true,
+      "isPremium": false,
+      "emailVerified": true,
+      "provider": "facebook"
+    },
+    "isNewUser": true
+  }
+}
+
+Error (400 -- no token):
+{
+  "success": false,
+  "message": "Facebook access token is required"
+}
+
+Error (400 -- no email on Facebook account):
+{
+  "success": false,
+  "message": "Your Facebook account does not have an email address. Please sign up with email instead."
+}
+
+Error (401):
+{
+  "success": false,
+  "message": "Invalid or expired Facebook token"
+}
+
+Error (502 -- Facebook API down):
+{
+  "success": false,
+  "message": "Facebook API request timed out"
+}
+
+Cookies Set: Same as Google (accessToken + refreshToken)
+
+Frontend Notes:
+- Same isNewUser / profileCurrentStage logic as Google
+- Some Facebook accounts do not have an email (phone-only accounts)
+  In that case, the user will get a 400 error and should be directed to
+  sign up with email instead. Show a user-friendly message.
+- Facebook profile photos are temporary URLs; they may expire
+- Request email permission in your Facebook Login scope:
+  FB.login(callback, { scope: 'email,public_profile' })
+
+================================================================================
+3. LOGIN/SIGNUP WITH APPLE
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/auth/apple
+Auth: Not Required
+
+Purpose: Authenticate a user with their Apple ID. Same behavior as Google/FB.
+
+Request Body:
+{
+  "identityToken": "eyJraWQiOiJmaDZCcz...",    // REQUIRED -- Apple identity token (JWT)
+  "user": {                                      // Optional -- only sent on FIRST login
+    "firstName": "John",
+    "lastName": "Doe"
+  }
+}
+
+IMPORTANT: Apple only sends the user's name on the FIRST authentication.
+After the first time, Apple will not include the name in subsequent logins.
+The frontend MUST send the user object with firstName/lastName on the first
+login attempt. If missed, the user's name will be empty and they can update
+it later via their profile.
+
+How to get the identityToken on frontend:
+- Web: Apple JS SDK -> AppleID.auth.signIn() -> response.authorization.id_token
+- React: use react-apple-login or @nicolo-ribaudo/react-apple-login
+- iOS native: ASAuthorizationAppleIDCredential.identityToken (as string)
+- The user object comes from: response.user (only on first auth)
+
+Response (200 -- New User, first Apple login):
+{
+  "success": true,
+  "status": 200,
+  "message": "Apple authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "eyJhbGciOi...",
+    "user": {
+      "id": "cuid_user_new",
+      "username": "johndoe2847",
+      "email": "john@privaterelay.appleid.com",
+      "firstName": "John",
+      "lastName": "Doe",
+      "profilePhoto": null,
+      "profileCurrentStage": 1,
+      "isActive": true,
+      "isPremium": false,
+      "emailVerified": true,
+      "provider": "apple"
+    },
+    "isNewUser": true
+  }
+}
+
+Response (200 -- Existing User):
+{
+  "success": true,
+  "status": 200,
+  "message": "Apple authentication successful.",
+  "data": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "eyJhbGciOi...",
+    "user": { ... },
+    "isNewUser": false
+  }
+}
+
+Error (400 -- no token):
+{
+  "success": false,
+  "message": "Apple identity token is required"
+}
+
+Error (400 -- no email shared):
+{
+  "success": false,
+  "message": "Apple account did not provide an email address. Please allow email sharing and try again."
+}
+
+Error (401):
+{
+  "success": false,
+  "message": "Invalid or expired Apple identity token"
+}
+
+Cookies Set: Same as Google/Facebook
+
+Frontend Notes:
+- Apple does NOT provide a profile photo; profilePhoto will be null
+- Apple may provide a private relay email (e.g., xyz@privaterelay.appleid.com)
+  This is normal and is a valid forwarding email. Treat it like a real email.
+- The user.firstName and user.lastName from Apple are ONLY available on the
+  FIRST login attempt. You MUST capture and send them in the request body.
+  Cache these values locally (localStorage) before sending, in case the
+  request fails and needs to be retried.
+- On subsequent logins, just send { identityToken } without the user object
+- Same isNewUser / profileCurrentStage logic as Google/Facebook
+
+================================================================================
+4. GET LINKED ACCOUNTS
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/auth/linked-accounts
+Auth: User Token Required
+
+Purpose: Get all social providers linked to the authenticated user's account.
+Useful for the settings/security page where users manage their login methods.
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "message": "Linked accounts fetched successfully.",
+  "data": [
+    {
+      "id": "cuid_linked_1",
+      "provider": "google",
+      "email": "john@gmail.com",
+      "displayName": "John Doe",
+      "profilePhoto": "https://lh3.googleusercontent.com/photo.jpg",
+      "createdAt": "2026-02-20T10:30:00Z"
+    },
+    {
+      "id": "cuid_linked_2",
+      "provider": "apple",
+      "email": "xyz@privaterelay.appleid.com",
+      "displayName": "John Doe",
+      "profilePhoto": null,
+      "createdAt": "2026-02-22T14:00:00Z"
+    }
+  ]
+}
+
+Response (200 -- no linked accounts):
+{
+  "success": true,
+  "status": 200,
+  "message": "Linked accounts fetched successfully.",
+  "data": []
+}
+
+Frontend Notes:
+- Show each linked provider with its icon (Google, Facebook, Apple)
+- Show the email associated with each provider
+- Show a "Link" button for providers not in the list
+- Show an "Unlink" button for providers in the list
+- If the user has no password AND only one linked account, disable the
+  "Unlink" button and show a tooltip: "Set a password before unlinking"
+
+================================================================================
+5. LINK A SOCIAL ACCOUNT
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/auth/link/:provider
+Auth: User Token Required
+
+Purpose: Link a new social provider to the authenticated user's account.
+The user must already be logged in. The frontend obtains a token from the
+provider and sends it here.
+
+Path Parameters:
+- provider (string, REQUIRED) -- "google", "facebook", or "apple"
+
+Request Body (for Google):
+{
+  "token": "eyJhbGciOiJSUzI1NiIs..."    // The Google ID token
+}
+
+Request Body (for Facebook):
+{
+  "token": "EAAGm0PX4ZCps..."            // The Facebook access token
+}
+
+Request Body (for Apple):
+{
+  "token": "eyJraWQiOiJmaDZCcz...",      // The Apple identity token
+  "user": {                               // Optional, same as Apple login
+    "firstName": "John",
+    "lastName": "Doe"
+  }
+}
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "message": "Account linked successfully.",
+  "data": {
+    "id": "cuid_linked_new",
+    "provider": "facebook",
+    "email": "john@gmail.com",
+    "displayName": "John Doe",
+    "createdAt": "2026-02-25T10:00:00Z"
+  }
+}
+
+Error (400 -- missing params):
+{
+  "success": false,
+  "message": "Provider and token are required"
+}
+
+Error (400 -- unsupported provider):
+{
+  "success": false,
+  "message": "Unsupported provider: twitter"
+}
+
+Error (401 -- invalid token):
+{
+  "success": false,
+  "message": "Invalid or expired Facebook token"
+}
+
+Error (409 -- already linked):
+{
+  "success": false,
+  "message": "Your account already has facebook linked"
+}
+
+Error (409 -- provider account used by someone else):
+{
+  "success": false,
+  "message": "This facebook account is already linked to another user"
+}
+
+Frontend Notes:
+- The flow is: user clicks "Link Google" -> show Google consent screen ->
+  get token -> POST /auth/link/google with the token
+- After success, refresh the linked accounts list
+- The 409 "already linked to another user" error means someone else already
+  used this social account. The user should use a different social account.
+
+================================================================================
+6. UNLINK A SOCIAL ACCOUNT
+================================================================================
+
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/auth/link/:provider
+Auth: User Token Required
+
+Purpose: Remove a linked social provider from the authenticated user's account.
+Cannot unlink if it is the user's only sign-in method (no password + no other
+linked providers).
+
+Path Parameters:
+- provider (string, REQUIRED) -- "google", "facebook", or "apple"
+
+Response (200):
+{
+  "success": true,
+  "status": 200,
+  "message": "Account unlinked successfully.",
+  "data": {
+    "message": "google account unlinked successfully"
+  }
+}
+
+Error (400 -- last sign-in method):
+{
+  "success": false,
+  "message": "Cannot unlink your only sign-in method. Set a password first."
+}
+
+Error (404 -- not linked):
+{
+  "success": false,
+  "message": "This provider is not linked to your account"
+}
+
+Frontend Notes:
+- Before showing the unlink button, check if the user has a password or
+  more than one linked provider. If neither, show a warning instead.
+- After unlinking, refresh the linked accounts list
+- If the user wants to unlink their only provider, guide them to set a
+  password first (via the "Forgot Password" or "Set Password" flow)
+
+================================================================================
+EMAIL/PASSWORD LOGIN WITH OAUTH ACCOUNTS
+================================================================================
+
+When a user signs up via OAuth (no password), and later tries to log in via
+email/password, they will receive:
+
+Error (403):
+{
+  "success": false,
+  "message": "This account was created via social login. Please use your social provider to sign in, or use 'Forgot Password' to set a password."
+}
+
+Frontend Notes:
+- Show a message explaining the situation
+- Offer two options:
+  1. "Sign in with Google/Facebook/Apple" buttons
+  2. "Set a password" link that goes to the "Forgot Password" flow
+- The "Forgot Password" flow works for OAuth users too -- it sends an OTP
+  to their email, and after verification they can set a new password
+- After setting a password, they can use both email/password AND social login
+
+================================================================================
+COMPLETE FRONTEND FLOWS
+================================================================================
+
+Flow 1: Social Login (Google Example)
+  1. Show "Sign in with Google" button
+  2. User clicks -> Google consent screen opens
+  3. User authenticates with Google
+  4. Get credentialResponse.credential (the ID token)
+  5. POST /api/ecosystem/auth/google { idToken: credential }
+  6. On success:
+     - Store accessToken and refreshToken
+     - Check isNewUser:
+       - true: redirect to onboarding (username step, since stage = 1)
+       - false: check profileCurrentStage and redirect accordingly
+         - stage < 2: redirect to set username
+         - stage < 3: redirect to select role
+         - stage >= 3: redirect to home/dashboard
+
+Flow 2: Social Login (Facebook Example)
+  1. Show "Sign in with Facebook" button
+  2. User clicks -> FB.login() with scope: 'email,public_profile'
+  3. Get response.authResponse.accessToken
+  4. POST /api/ecosystem/auth/facebook { accessToken }
+  5. Same success/redirect logic as Flow 1
+  6. Handle 400 error for email-less Facebook accounts
+
+Flow 3: Social Login (Apple Example)
+  1. Show "Sign in with Apple" button
+  2. User clicks -> Apple consent screen opens
+  3. On first login, Apple returns: authorization.id_token + user object
+  4. Cache user.firstName and user.lastName in localStorage
+  5. POST /api/ecosystem/auth/apple { identityToken: id_token, user: { firstName, lastName } }
+  6. Same success/redirect logic as Flow 1
+  7. On subsequent logins, just send { identityToken } (no user object)
+
+Flow 4: Managing Linked Accounts (Settings Page)
+  1. GET /api/ecosystem/auth/linked-accounts
+  2. Show list of linked providers with their icons
+  3. For each unlinked provider, show a "Link" button
+  4. For each linked provider, show an "Unlink" button
+  5. Check if user has a password (can be inferred: if provider === "local"
+     or if they signed up with email, they have a password)
+  6. To link: trigger provider consent -> get token -> POST /auth/link/:provider
+  7. To unlink: DELETE /auth/link/:provider
+  8. Handle the "last sign-in method" error gracefully
+
+Flow 5: OAuth User Wants to Set a Password
+  1. User signed up via Google (no password)
+  2. They go to Settings -> Security -> "Set Password"
+  3. POST /api/ecosystem/auth/forgot-password { email: user.email }
+  4. User receives OTP via email
+  5. POST /api/ecosystem/auth/verify-forgot-otp { email, otp }
+  6. POST /api/ecosystem/auth/reset-password { resetToken, newPassword }
+  7. Now the user has both social login AND email/password login available
+
+================================================================================
+FRONTEND LIBRARY RECOMMENDATIONS
+================================================================================
+
+Google:
+- React: @react-oauth/google
+- Vue: vue3-google-login
+- Vanilla: Google Identity Services script tag
+
+Facebook:
+- React: react-facebook-login or @greatsumini/react-facebook-login
+- Vue: vue-facebook-login-component
+- Vanilla: Facebook JavaScript SDK (FB.login)
+
+Apple:
+- React: react-apple-login
+- Vue: vue-apple-login
+- Vanilla: Apple JS SDK script tag
+
+================================================================================
+ENVIRONMENT VARIABLES (Frontend)
+================================================================================
+
+These are needed in your frontend app:
+
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+FACEBOOK_APP_ID=your-facebook-app-id
+APPLE_CLIENT_ID=your-apple-services-id
+
+Note: These are PUBLIC values and safe to expose in frontend code.
+The secret keys are stored only on the backend.

@@ -1,0 +1,216 @@
+================================================================================
+OFFICE SUBSCRIPTION API — STARTUP (RECEIVER) PORTAL
+================================================================================
+
+Base URL prefix:  /api/startup-portal
+Auth middleware:  authenticate (requires Bearer access token; resolves req.user)
+
+Required headers on EVERY request:
+  Authorization: Bearer <accessToken>
+  Content-Type:  application/json
+
+Startup context resolution (server-side):
+  startupId is taken from (in order): body.startupId > query.startupId >
+  req.user.startupId > active StartupMember row for the user. If none can be
+  determined, server returns 400.
+
+Common response envelope:
+{
+  "success": <bool>, "status": <httpStatus>,
+  "data": <object|array|null>, "message": <string|null>
+}
+
+================================================================================
+1. INITIATE BOOKING PAYMENT
+================================================================================
+POST /api/startup-portal/office/subscriptions/initiate
+
+Purpose: For an existing OfficeBooking (status = PENDING_PAYMENT), create either
+         a Razorpay Order (one-time) or a Razorpay Subscription (recurring) and
+         return the keys the frontend needs to open Razorpay Checkout.
+
+Body:
+{
+  "bookingId":  "<cuid>",        // required
+  "startupId":  "<cuid>"         // optional override
+}
+
+PRECONDITIONS / GATES:
+  - Booking must exist and be owned by the resolved startup, otherwise 403.
+  - Booking must have an attached pricingId.
+  - Booking's office must belong to a tenant whose IncubationPayoutAccount
+    is kycStatus = "ACTIVATED" AND isActive = true. Otherwise 400 with
+    message: "Payout account must be activated before accepting paid bookings."
+  - Server picks ONE_TIME vs SUBSCRIPTION based on
+    booking.paymentMode || pricing.paymentMode.
+
+Success response (200) — ONE_TIME order:
+{
+  "success": true,
+  "status":  200,
+  "message": "Payment initiated",
+  "data": {
+    "mode":             "ONE_TIME",
+    "paymentId":        "<cuid>",          // OfficePayment.id (status PENDING)
+    "razorpayOrderId":  "order_xxxx",
+    "amount":           <int>,             // in paise (rupees * 100)
+    "currency":         "INR",
+    "bookingId":        "<cuid>",
+    "key":              "<RAZORPAY_KEY_ID>"
+  }
+}
+
+Success response (200) — SUBSCRIPTION:
+{
+  "success": true,
+  "status":  200,
+  "message": "Payment initiated",
+  "data": {
+    "mode":                    "SUBSCRIPTION",
+    "subscriptionId":          "<cuid>",        // OfficeSubscription.id
+    "razorpaySubscriptionId":  "sub_xxxx",
+    "shortUrl":                "https://rzp.io/i/xxx",
+    "bookingId":               "<cuid>",
+    "key":                     "<RAZORPAY_KEY_ID>",
+    "totalCount":              <int>,           // number of cycles
+    "planId":                  "plan_xxx"
+  }
+}
+
+Errors:
+  400 — "Booking has no pricing attached"
+  400 — "Booking is not associated with a tenant payout account"
+  400 — "Payout account must be activated before accepting paid bookings.
+         Complete KYC in Settings -> Payout Account."
+  403 — "Not authorized to pay for this booking"
+  404 — "Booking not found"
+
+FRONTEND FLOW:
+  ONE_TIME:
+    var rzp = new Razorpay({
+      key, order_id: razorpayOrderId, amount, currency,
+      handler: function (resp) {
+        // POST resp to verify endpoint (existing office-receiver verifyPayment)
+      }
+    });
+  SUBSCRIPTION:
+    var rzp = new Razorpay({
+      key,
+      subscription_id: razorpaySubscriptionId,
+      handler: function (resp) {
+        // POST resp to /office/subscriptions/verify (below)
+      }
+    });
+
+================================================================================
+2. VERIFY SUBSCRIPTION AUTHORIZATION
+================================================================================
+POST /api/startup-portal/office/subscriptions/verify
+
+Purpose: After Razorpay Checkout returns success, the frontend forwards the
+         signed handshake here to flip the subscription to AUTHENTICATED and
+         the booking to CONFIRMED + isPaid = true.
+
+Body (all required):
+{
+  "bookingId":              "<cuid>",
+  "razorpayPaymentId":      "pay_xxx",
+  "razorpaySubscriptionId": "sub_xxx",
+  "razorpaySignature":      "<sha256-hex>"
+}
+
+Server verification:
+  HMAC_SHA256(`${razorpayPaymentId}|${razorpaySubscriptionId}`,
+              process.env.RAZORPAY_KEY_SECRET) === razorpaySignature
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Subscription authorized",
+  "data": {
+    "subscription": { /* updated OfficeSubscription row, status="AUTHENTICATED" */ },
+    "bookingId":    "<cuid>"
+  }
+}
+
+Errors:
+  400 — "Subscription ID mismatch" / "Invalid subscription signature"
+  403 — "Not authorized"
+  404 — "Subscription not found"
+
+================================================================================
+3. LIST MY SUBSCRIPTIONS
+================================================================================
+GET /api/startup-portal/office/subscriptions
+
+Query params (all optional):
+  page    integer >= 1   default 1
+  limit   integer 1-100  default 10
+  status  enum           one of:
+            PENDING | AUTHENTICATED | ACTIVE | PAUSED | HALTED |
+            CANCELLED | COMPLETED | EXPIRED
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Subscriptions fetched",
+  "data": {
+    "data":       [ /* OfficeSubscription rows, see tenant doc for shape */ ],
+    "total":      <int>,
+    "page":       <int>,
+    "limit":      <int>,
+    "totalPages": <int>
+  }
+}
+
+Filtering: Only subscriptions where startupId matches the resolved startup
+are returned.
+
+================================================================================
+4. GET MY SUBSCRIPTION BY BOOKING ID
+================================================================================
+GET /api/startup-portal/office/subscriptions/:bookingId
+
+Path params:
+  bookingId — OfficeBooking.id
+
+Success response (200): same shape as tenant "Get One" — includes nested
+booking, payments[], pricing.
+
+Errors:
+  403 — "Not authorized" (subscription belongs to another startup)
+  404 — "Subscription not found"
+
+================================================================================
+5. CANCEL MY SUBSCRIPTION
+================================================================================
+POST /api/startup-portal/office/subscriptions/:bookingId/cancel
+
+Body (optional):
+{
+  "cancelAtCycleEnd": <bool>   // default true
+}
+
+Success response (200):
+{
+  "success": true,
+  "status":  200,
+  "message": "Subscription cancelled",
+  "data":    { /* updated OfficeSubscription row, status="CANCELLED" */ }
+}
+
+================================================================================
+NOTES FOR THE FRONTEND
+================================================================================
+- The receiver (startup) DOES NOT have pause/resume — only the tenant can
+  pause/resume. Don't render those controls in the startup portal.
+- After verify-subscription returns successfully, the booking is CONFIRMED
+  but ACTIVE only kicks in once Razorpay sends subscription.activated.
+- Server runs daily reminders at 09:30 IST one day before nextChargeAt; those
+  arrive via the existing notification channel — no extra API needed.
+- If status flips to HALTED, surface a "Retry payment" CTA. Suspension happens
+  on day 7 of HALTED, auto-cancel on day 21.
+- gracePeriodEndsAt on the booking represents the latest date payment can be
+  completed before the booking is considered overdue.

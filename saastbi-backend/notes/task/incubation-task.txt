@@ -1,0 +1,1060 @@
+================================================================================
+TASK MANAGEMENT API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-03
+Base URL: /api/incubation-portal
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+
+================================================================================
+TASK MODULE FLOW
+================================================================================
+
+The Task module allows incubation centers to manage internal tasks for their
+team. Tasks can be assigned to incubation users, tracked through various
+statuses, and include subtasks, comments, and file attachments.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        INCUBATION TASK MANAGEMENT                             │
+│                    Base: /api/incubation-portal                               │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  • Creates and manages internal team tasks                                    │
+│  • Assigns tasks to incubation users (admins, managers, staff)                │
+│  • Tracks task status through PENDING → IN_PROGRESS → COMPLETED               │
+│  • Supports subtasks, comments, and file attachments                          │
+│  • Activity logging for audit trail                                           │
+│  • Dashboard with statistics and overdue tracking                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+TASK LIFECYCLE:
+--------------------------------------------------------------------------------
+
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   PENDING    │────▶│ IN_PROGRESS  │────▶│  IN_REVIEW   │────▶│  COMPLETED   │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+       │                    │                    │
+       │                    ▼                    │
+       │             ┌──────────────┐            │
+       └────────────▶│   BLOCKED    │◀───────────┘
+                     └──────────────┘
+
+Status Meanings:
+  • PENDING      → Task created, not started
+  • IN_PROGRESS  → Work has begun
+  • IN_REVIEW    → Work done, awaiting review
+  • BLOCKED      → Cannot proceed due to dependency/issue
+  • COMPLETED    → Task finished
+
+TYPICAL WORKFLOW:
+--------------------------------------------------------------------------------
+
+Step 1: Create Task
+─────────────────────────────────────────────────────────────────────────────
+POST /api/incubation-portal/task
+
+→ Create task with title, description, priority, due date
+→ Optionally assign to a team member
+→ Returns task with status "PENDING"
+
+Step 2: Assign Task (if not assigned during creation)
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/incubation-portal/task/:taskId/assign
+
+→ Assign task to an incubation user
+→ Activity logged
+
+Step 3: Add Subtasks (Optional)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/incubation-portal/task/:taskId/subtask
+
+→ Break down task into smaller checklist items
+→ Each subtask can be toggled complete/incomplete
+
+Step 4: Update Status as Work Progresses
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/incubation-portal/task/:taskId/status
+
+→ Move task through: PENDING → IN_PROGRESS → IN_REVIEW → COMPLETED
+→ All status changes logged in activity
+
+Step 5: Add Comments (Collaboration)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/incubation-portal/task/:taskId/comment
+
+→ Team members can discuss task
+→ Comments are logged in activity
+
+Step 6: Attach Files (Optional)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/incubation-portal/task/:taskId/attachment
+
+→ Upload supporting documents
+→ Files stored in S3
+
+Step 7: Complete Task
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/incubation-portal/task/:taskId/status { "status": "COMPLETED" }
+
+→ Task marked complete
+→ completedAt timestamp recorded
+
+
+FLOW DIAGRAM - TASK CREATION TO COMPLETION:
+--------------------------------------------------------------------------------
+
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Create Task    │────▶│  Assign Task    │────▶│  Add Subtasks   │
+│  POST /task     │     │ PATCH /assign   │     │ POST /subtask   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                    ┌───────────────────────────────────┘
+                    ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ Update Status   │────▶│  Add Comments   │────▶│ Attach Files    │
+│ PATCH /status   │     │ POST /comment   │     │ POST /attachment│
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                    ┌───────────────────────────────────┘
+                    ▼
+            ┌─────────────────┐
+            │  Complete Task  │
+            │ PATCH /status   │
+            │ COMPLETED       │
+            └─────────────────┘
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# TASK CRUD
+| Endpoint                          | Method | Purpose                                    |
+|-----------------------------------|--------|--------------------------------------------|
+| /task                             | POST   | Create new task                            |
+| /tasks                            | GET    | List all tasks (paginated, filterable)     |
+| /task/:taskId                     | GET    | Get task details with subtasks/comments    |
+| /task/:taskId                     | PUT    | Update task (title, description, etc)      |
+| /task/:taskId                     | DELETE | Archive task (soft delete)                 |
+
+# TASK STATUS & ASSIGNMENT
+| Endpoint                          | Method | Purpose                                    |
+|-----------------------------------|--------|--------------------------------------------|
+| /task/:taskId/status              | PATCH  | Update task status                         |
+| /task/:taskId/assign              | PATCH  | Assign/unassign task to user               |
+
+# TASK VIEWS & FILTERS
+| Endpoint                          | Method | Purpose                                    |
+|-----------------------------------|--------|--------------------------------------------|
+| /tasks/my-tasks                   | GET    | Get tasks assigned to current user         |
+| /tasks/created-by-me              | GET    | Get tasks created by current user          |
+| /tasks/overdue                    | GET    | Get overdue tasks                          |
+| /tasks/stats                      | GET    | Get task statistics                        |
+| /tasks/team-members               | GET    | Get list of assignable team members        |
+
+# SUBTASKS
+| Endpoint                                  | Method | Purpose                            |
+|-------------------------------------------|--------|------------------------------------|
+| /task/:taskId/subtask                     | POST   | Add subtask                        |
+| /task/:taskId/subtask/:subtaskId          | PUT    | Update subtask title               |
+| /task/:taskId/subtask/:subtaskId/toggle   | PATCH  | Toggle subtask complete/incomplete |
+| /task/:taskId/subtask/:subtaskId          | DELETE | Remove subtask                     |
+| /task/:taskId/subtasks/reorder            | PATCH  | Reorder subtasks                   |
+
+# ATTACHMENTS
+| Endpoint                                      | Method | Purpose                        |
+|-----------------------------------------------|--------|--------------------------------|
+| /task/:taskId/attachment                      | POST   | Add file attachment            |
+| /task/:taskId/attachment/:attachmentId        | DELETE | Remove attachment              |
+
+# COMMENTS
+| Endpoint                                  | Method | Purpose                            |
+|-------------------------------------------|--------|------------------------------------|
+| /task/:taskId/comment                     | POST   | Add comment                        |
+| /task/:taskId/comment/:commentId          | PUT    | Update comment                     |
+| /task/:taskId/comment/:commentId          | DELETE | Delete comment                     |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+TaskStatus:
+- PENDING       (Not started)
+- IN_PROGRESS   (Work in progress)
+- IN_REVIEW     (Awaiting review)
+- BLOCKED       (Cannot proceed)
+- COMPLETED     (Done)
+
+PriorityLevel:
+- LOW
+- MEDIUM
+- HIGH
+- URGENT
+
+TeamType:
+- INCUBATION    (Incubation center tasks)
+- STARTUP       (Startup tasks)
+
+TaskActivityAction:
+- CREATED
+- UPDATED
+- STATUS_CHANGED
+- ASSIGNED
+- COMMENTED
+- ATTACHMENT_ADDED
+- ATTACHMENT_REMOVED
+- SUBTASK_ADDED
+- SUBTASK_COMPLETED
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 5
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. TASK CRUD OPERATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 CREATE TASK
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/task
+Auth: Portal Token Required
+
+Purpose: Create a new task for the incubation team.
+
+Request Body:
+{
+  "title": "Review startup applications",
+  "description": "Review and shortlist startup applications for Q2 cohort",
+  "priority": "HIGH",
+  "assigneeId": "cuid_user_123",
+  "dueDate": "2026-02-15",
+  "startDate": "2026-02-01",
+  "labels": ["review", "cohort-q2"]
+}
+
+Field Details:
+- title (string, required): Task title
+- description (string, optional): Detailed description
+- priority (enum, optional): LOW | MEDIUM | HIGH | URGENT (default: MEDIUM)
+- assigneeId (string, optional): Incubation user ID to assign
+- dueDate (string, optional): ISO date string
+- startDate (string, optional): ISO date string
+- labels (array, optional): String tags for categorization
+
+Response (201):
+{
+  "success": true,
+  "message": "Task created",
+  "data": {
+    "id": "cuid_task_123",
+    "title": "Review startup applications",
+    "description": "Review and shortlist startup applications for Q2 cohort",
+    "priority": "HIGH",
+    "status": "PENDING",
+    "teamType": "INCUBATION",
+    "teamId": "cuid_tenant_123",
+    "creatorId": "cuid_user_456",
+    "assigneeId": "cuid_user_123",
+    "dueDate": "2026-02-15T00:00:00.000Z",
+    "startDate": "2026-02-01T00:00:00.000Z",
+    "completedAt": null,
+    "labels": ["review", "cohort-q2"],
+    "orderIndex": 0,
+    "isArchived": false,
+    "createdAt": "2026-02-03T10:00:00.000Z",
+    "updatedAt": "2026-02-03T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET ALL TASKS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/tasks
+Auth: Portal Token Required
+
+Purpose: List all tasks for the tenant with pagination and filters.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): PENDING | IN_PROGRESS | IN_REVIEW | BLOCKED | COMPLETED
+- priority (enum): LOW | MEDIUM | HIGH | URGENT
+- assigneeId (string): Filter by assigned user
+- label (string): Filter by label
+- search (string): Search in title and description
+- fromDate (string): Filter by due date range start
+- toDate (string): Filter by due date range end
+- isOverdue ("true"): Get only overdue tasks
+
+Example: ?status=IN_PROGRESS&priority=HIGH&assigneeId=cuid_user_123
+
+Response (200):
+{
+  "success": true,
+  "message": "Tasks fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_task_123",
+        "title": "Review startup applications",
+        "description": "...",
+        "priority": "HIGH",
+        "status": "IN_PROGRESS",
+        "creatorId": "cuid_user_456",
+        "assigneeId": "cuid_user_123",
+        "dueDate": "2026-02-15T00:00:00.000Z",
+        "labels": ["review", "cohort-q2"],
+        "subtasks": [
+          { "id": "...", "title": "Check financials", "isCompleted": true },
+          { "id": "...", "title": "Interview founders", "isCompleted": false }
+        ],
+        "_count": {
+          "comments": 5,
+          "attachments": 2
+        }
+      }
+    ],
+    "total": 25,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 2
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET TASK BY ID
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId
+Auth: Portal Token Required
+
+Purpose: Get complete task details including subtasks, attachments, comments, and activity.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task details",
+  "data": {
+    "id": "cuid_task_123",
+    "title": "Review startup applications",
+    "description": "Review and shortlist startup applications for Q2 cohort",
+    "priority": "HIGH",
+    "status": "IN_PROGRESS",
+    "teamType": "INCUBATION",
+    "teamId": "cuid_tenant_123",
+    "creatorId": "cuid_user_456",
+    "assigneeId": "cuid_user_123",
+    "dueDate": "2026-02-15T00:00:00.000Z",
+    "startDate": "2026-02-01T00:00:00.000Z",
+    "completedAt": null,
+    "labels": ["review", "cohort-q2"],
+    "subtasks": [
+      {
+        "id": "cuid_subtask_1",
+        "title": "Check financials",
+        "isCompleted": true,
+        "completedAt": "2026-02-02T14:00:00.000Z",
+        "completedById": "cuid_user_123",
+        "orderIndex": 0
+      },
+      {
+        "id": "cuid_subtask_2",
+        "title": "Interview founders",
+        "isCompleted": false,
+        "completedAt": null,
+        "orderIndex": 1
+      }
+    ],
+    "attachments": [
+      {
+        "id": "cuid_attachment_1",
+        "fileName": "application_checklist.pdf",
+        "fileUrl": "https://...",
+        "fileType": "application/pdf",
+        "fileSize": 245000,
+        "uploadedById": "cuid_user_456",
+        "createdAt": "2026-02-01T10:00:00.000Z"
+      }
+    ],
+    "comments": [
+      {
+        "id": "cuid_comment_1",
+        "authorId": "cuid_user_789",
+        "content": "I've completed the financial review for 5 startups",
+        "createdAt": "2026-02-02T15:00:00.000Z",
+        "updatedAt": "2026-02-02T15:00:00.000Z"
+      }
+    ],
+    "activities": [
+      {
+        "id": "cuid_activity_1",
+        "actorId": "cuid_user_456",
+        "action": "CREATED",
+        "field": null,
+        "oldValue": null,
+        "newValue": null,
+        "createdAt": "2026-02-01T09:00:00.000Z"
+      },
+      {
+        "id": "cuid_activity_2",
+        "actorId": "cuid_user_123",
+        "action": "STATUS_CHANGED",
+        "field": "status",
+        "oldValue": "PENDING",
+        "newValue": "IN_PROGRESS",
+        "createdAt": "2026-02-01T10:00:00.000Z"
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 UPDATE TASK
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId
+Auth: Portal Token Required
+
+Purpose: Update task properties (title, description, priority, dates, labels).
+
+Request Body:
+{
+  "title": "Review startup applications - Q2 2026",
+  "priority": "URGENT",
+  "dueDate": "2026-02-10",
+  "labels": ["review", "cohort-q2", "urgent"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Task updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+1.5 ARCHIVE TASK
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId
+Auth: Portal Token Required
+
+Purpose: Archive a task (soft delete). Task is hidden from lists but not deleted.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task archived",
+  "data": {
+    "id": "cuid_task_123",
+    "isArchived": true
+  }
+}
+
+================================================================================
+2. TASK STATUS & ASSIGNMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 UPDATE TASK STATUS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/status
+Auth: Portal Token Required
+
+Purpose: Update task status. When set to COMPLETED, completedAt is recorded.
+
+Request Body:
+{
+  "status": "COMPLETED"
+}
+
+Valid Statuses: PENDING | IN_PROGRESS | IN_REVIEW | BLOCKED | COMPLETED
+
+Response (200):
+{
+  "success": true,
+  "message": "Task status updated",
+  "data": {
+    "id": "cuid_task_123",
+    "status": "COMPLETED",
+    "completedAt": "2026-02-03T16:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+2.2 ASSIGN TASK
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/assign
+Auth: Portal Token Required
+
+Purpose: Assign task to an incubation user. Pass null to unassign.
+
+Request Body:
+{
+  "assigneeId": "cuid_user_123"
+}
+
+To unassign:
+{
+  "assigneeId": null
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Task assigned",
+  "data": {
+    "id": "cuid_task_123",
+    "assigneeId": "cuid_user_123"
+  }
+}
+
+================================================================================
+3. TASK VIEWS & FILTERS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 GET MY TASKS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/tasks/my-tasks
+Auth: Portal Token Required
+
+Purpose: Get tasks assigned to the current user.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): Filter by status
+
+Response (200):
+{
+  "success": true,
+  "message": "My tasks fetched",
+  "data": {
+    "data": [...],
+    "total": 10,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 GET TASKS CREATED BY ME
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/tasks/created-by-me
+Auth: Portal Token Required
+
+Purpose: Get tasks created by the current user.
+
+Query Parameters: Same as GET MY TASKS
+
+Response (200):
+{
+  "success": true,
+  "message": "Created tasks fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+3.3 GET OVERDUE TASKS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/tasks/overdue
+Auth: Portal Token Required
+
+Purpose: Get tasks that are past due date and not completed.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Response (200):
+{
+  "success": true,
+  "message": "Overdue tasks fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_task_456",
+        "title": "Submit grant report",
+        "dueDate": "2026-01-31T00:00:00.000Z",
+        "status": "IN_PROGRESS",
+        "priority": "HIGH"
+      }
+    ],
+    "total": 3,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 GET TASK STATISTICS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/tasks/stats
+Auth: Portal Token Required
+
+Purpose: Get task statistics for dashboard.
+
+Response (200):
+{
+  "success": true,
+  "message": "Task statistics",
+  "data": {
+    "byStatus": {
+      "PENDING": 5,
+      "IN_PROGRESS": 12,
+      "IN_REVIEW": 3,
+      "BLOCKED": 1,
+      "COMPLETED": 45
+    },
+    "byPriority": {
+      "LOW": 10,
+      "MEDIUM": 35,
+      "HIGH": 15,
+      "URGENT": 6
+    },
+    "overdue": 3
+  }
+}
+
+--------------------------------------------------------------------------------
+3.5 GET TEAM MEMBERS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/tasks/team-members
+Auth: Portal Token Required
+
+Purpose: Get list of incubation users who can be assigned tasks.
+
+Response (200):
+{
+  "success": true,
+  "message": "Team members fetched",
+  "data": [
+    {
+      "id": "cuid_user_123",
+      "name": "John Doe",
+      "email": "john@incubator.com",
+      "imageUrl": "https://...",
+      "role": {
+        "id": "cuid_role_1",
+        "roleName": "Program Manager"
+      }
+    },
+    {
+      "id": "cuid_user_456",
+      "name": "Jane Smith",
+      "email": "jane@incubator.com",
+      "imageUrl": "https://...",
+      "role": {
+        "id": "cuid_role_2",
+        "roleName": "Admin"
+      }
+    }
+  ]
+}
+
+================================================================================
+4. SUBTASKS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 ADD SUBTASK
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/subtask
+Auth: Portal Token Required
+
+Purpose: Add a checklist item to a task.
+
+Request Body:
+{
+  "title": "Review financial documents"
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Subtask added",
+  "data": {
+    "id": "cuid_subtask_1",
+    "taskId": "cuid_task_123",
+    "title": "Review financial documents",
+    "isCompleted": false,
+    "completedAt": null,
+    "completedById": null,
+    "orderIndex": 0
+  }
+}
+
+--------------------------------------------------------------------------------
+4.2 UPDATE SUBTASK
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/subtask/:subtaskId
+Auth: Portal Token Required
+
+Purpose: Update subtask title.
+
+Request Body:
+{
+  "title": "Review financial documents (updated)"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtask updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+4.3 TOGGLE SUBTASK
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/subtask/:subtaskId/toggle
+Auth: Portal Token Required
+
+Purpose: Toggle subtask completion status.
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtask toggled",
+  "data": {
+    "id": "cuid_subtask_1",
+    "isCompleted": true,
+    "completedAt": "2026-02-03T14:00:00.000Z",
+    "completedById": "cuid_user_123"
+  }
+}
+
+--------------------------------------------------------------------------------
+4.4 REMOVE SUBTASK
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/subtask/:subtaskId
+Auth: Portal Token Required
+
+Purpose: Delete a subtask.
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtask removed",
+  "data": {
+    "message": "Subtask removed"
+  }
+}
+
+--------------------------------------------------------------------------------
+4.5 REORDER SUBTASKS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/subtasks/reorder
+Auth: Portal Token Required
+
+Purpose: Reorder subtasks (for drag-and-drop UI).
+
+Request Body:
+{
+  "subtaskIds": ["cuid_subtask_3", "cuid_subtask_1", "cuid_subtask_2"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Subtasks reordered",
+  "data": {
+    "message": "Subtasks reordered"
+  }
+}
+
+================================================================================
+5. ATTACHMENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 ADD ATTACHMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/attachment
+Auth: Portal Token Required
+
+Purpose: Add file attachment to task (file already uploaded to S3).
+
+Request Body:
+{
+  "fileName": "checklist.pdf",
+  "fileUrl": "https://bucket.s3.region.amazonaws.com/path/checklist.pdf",
+  "fileKey": "path/checklist.pdf",
+  "fileType": "application/pdf",
+  "fileSize": 245000
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Attachment added",
+  "data": {
+    "id": "cuid_attachment_1",
+    "taskId": "cuid_task_123",
+    "fileName": "checklist.pdf",
+    "fileUrl": "https://...",
+    "fileKey": "path/checklist.pdf",
+    "fileType": "application/pdf",
+    "fileSize": 245000,
+    "uploadedById": "cuid_user_123",
+    "createdAt": "2026-02-03T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 REMOVE ATTACHMENT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/attachment/:attachmentId
+Auth: Portal Token Required
+
+Purpose: Remove attachment from task and delete from S3.
+
+Response (200):
+{
+  "success": true,
+  "message": "Attachment removed",
+  "data": {
+    "message": "Attachment removed"
+  }
+}
+
+================================================================================
+6. COMMENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 ADD COMMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/comment
+Auth: Portal Token Required
+
+Purpose: Add comment to task for team collaboration.
+
+Request Body:
+{
+  "content": "I've completed reviewing the first batch of applications."
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Comment added",
+  "data": {
+    "id": "cuid_comment_1",
+    "taskId": "cuid_task_123",
+    "authorId": "cuid_user_123",
+    "content": "I've completed reviewing the first batch of applications.",
+    "createdAt": "2026-02-03T14:00:00.000Z",
+    "updatedAt": "2026-02-03T14:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+6.2 UPDATE COMMENT
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/comment/:commentId
+Auth: Portal Token Required
+
+Purpose: Update own comment. Can only edit comments you authored.
+
+Request Body:
+{
+  "content": "I've completed reviewing all applications in the first batch."
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Comment updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+6.3 DELETE COMMENT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/task/:taskId/comment/:commentId
+Auth: Portal Token Required
+
+Purpose: Delete own comment. Can only delete comments you authored.
+
+Response (200):
+{
+  "success": true,
+  "message": "Comment deleted",
+  "data": {
+    "message": "Comment deleted"
+  }
+}
+
+================================================================================
+COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Create and Complete a Task
+--------------------------------------------------------------------------------
+
+Step 1: Get team members for assignment
+GET /api/incubation-portal/tasks/team-members
+
+Step 2: Create task
+POST /api/incubation-portal/task
+Body: {
+  "title": "Prepare demo day presentation",
+  "description": "Create slides and rehearse for Q2 demo day",
+  "priority": "HIGH",
+  "assigneeId": "cuid_user_123",
+  "dueDate": "2026-03-01",
+  "labels": ["demo-day", "presentation"]
+}
+
+Step 3: Add subtasks
+POST /api/incubation-portal/task/:taskId/subtask
+Body: { "title": "Create slide deck" }
+POST /api/incubation-portal/task/:taskId/subtask
+Body: { "title": "Prepare speaker notes" }
+POST /api/incubation-portal/task/:taskId/subtask
+Body: { "title": "Schedule rehearsal" }
+
+Step 4: Start working
+PATCH /api/incubation-portal/task/:taskId/status
+Body: { "status": "IN_PROGRESS" }
+
+Step 5: Complete subtasks as you go
+PATCH /api/incubation-portal/task/:taskId/subtask/:subtaskId/toggle
+
+Step 6: Add comment
+POST /api/incubation-portal/task/:taskId/comment
+Body: { "content": "Slides are ready for review" }
+
+Step 7: Move to review
+PATCH /api/incubation-portal/task/:taskId/status
+Body: { "status": "IN_REVIEW" }
+
+Step 8: Complete task
+PATCH /api/incubation-portal/task/:taskId/status
+Body: { "status": "COMPLETED" }
+
+
+EXAMPLE 2: Dashboard View
+--------------------------------------------------------------------------------
+
+Step 1: Get statistics
+GET /api/incubation-portal/tasks/stats
+
+Step 2: Get my assigned tasks
+GET /api/incubation-portal/tasks/my-tasks?status=IN_PROGRESS
+
+Step 3: Get overdue tasks
+GET /api/incubation-portal/tasks/overdue
+
+Step 4: Get high priority tasks
+GET /api/incubation-portal/tasks?priority=HIGH&status=PENDING
+
+
+EXAMPLE 3: Task with Attachments
+--------------------------------------------------------------------------------
+
+Step 1: Create task
+POST /api/incubation-portal/task
+Body: { "title": "Review grant application", "priority": "HIGH" }
+
+Step 2: Upload file to S3 (via existing S3 upload API)
+POST /api/incubation-portal/s3/upload
+→ Get fileUrl, fileKey
+
+Step 3: Attach file to task
+POST /api/incubation-portal/task/:taskId/attachment
+Body: {
+  "fileName": "grant_application.pdf",
+  "fileUrl": "https://...",
+  "fileKey": "...",
+  "fileType": "application/pdf",
+  "fileSize": 500000
+}
+
+Step 4: View task with attachment
+GET /api/incubation-portal/task/:taskId
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                    API TO USE
+--------------------------------------------------------------------------------
+"Create a new task"                         POST /task
+"See all tasks"                             GET /tasks
+"See task details"                          GET /task/:taskId
+"Update task title/description"             PUT /task/:taskId
+"Change task status"                        PATCH /task/:taskId/status
+"Assign task to someone"                    PATCH /task/:taskId/assign
+"See my assigned tasks"                     GET /tasks/my-tasks
+"See tasks I created"                       GET /tasks/created-by-me
+"See overdue tasks"                         GET /tasks/overdue
+"Get dashboard statistics"                  GET /tasks/stats
+"See who I can assign tasks to"             GET /tasks/team-members
+"Add a checklist item"                      POST /task/:taskId/subtask
+"Mark checklist item done"                  PATCH /task/:taskId/subtask/:id/toggle
+"Add a comment"                             POST /task/:taskId/comment
+"Attach a file"                             POST /task/:taskId/attachment
+"Archive/delete a task"                     DELETE /task/:taskId
+
+================================================================================
+END OF INCUBATION TASK API DOCUMENTATION
+================================================================================

@@ -1,0 +1,1169 @@
+===============================================================================
+ECOSYSTEM (USER) — UNIVERSAL CHAT API DOCUMENTATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-22
+Base URL: /api/ecosystem
+
+Authentication: User Bearer Token (authenticate middleware)
+Note: All REST endpoints require a valid User JWT token.
+      Socket.IO (/chat namespace) requires the same token.
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+Ecosystem users interact with the UNIVERSAL CHAT system, which supports:
+
+1. DIRECT MESSAGING — User ↔ User, User ↔ Page, User ↔ Startup, User ↔ Tenant
+2. CONTEXT-BASED CHATS — Mentorship, Mentor Sessions (auto-created)
+3. CHAT SEARCH — Smart search with connection-based ranking
+4. REAL-TIME — Socket.IO namespace "/chat" for instant messaging
+
+Key Concepts:
+- Each conversation has TWO participants (participant1 and participant2)
+- Participants can be any EntityType (USER, STARTUP, PAGE, TENANT, INCUBATION_USER)
+- Conversations can have a context (GENERAL, MENTORSHIP, MENTOR_SESSION)
+- Message permissions enforced: Blocks, Privacy Settings, Connection Status
+
+================================================================================
+DATA MODELS
+================================================================================
+
+Conversation:
+  - id: string (cuid)
+  - participant1Id: string
+  - participant1Type: EntityType
+  - participant2Id: string
+  - participant2Type: EntityType
+  - contextType: ConversationContext (default: "GENERAL")
+  - contextId: string | null (e.g., mentorshipId, sessionId)
+  - isActive: boolean
+  - isBlocked: boolean
+  - lastMessageAt: DateTime | null
+  - lastMessageBy: string | null
+  - unreadCount1: number (unread for participant1)
+  - unreadCount2: number (unread for participant2)
+  - totalMessages: number
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+Message:
+  - id: string (cuid)
+  - conversationId: string
+  - senderId: string
+  - senderType: EntityType
+  - content: string | null (null if deleted)
+  - messageType: MessageType (default: "TEXT")
+  - replyToId: string | null (for reply threads)
+  - attachments: JSON | null
+  - isRead: boolean
+  - isEdited: boolean
+  - editedAt: DateTime | null
+  - isDeleted: boolean
+  - deletedAt: DateTime | null
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+EntityType enum:
+  - USER
+  - STARTUP
+  - PAGE
+  - TENANT
+  - INCUBATION_USER
+
+ConversationContext enum:
+  - GENERAL
+  - MENTORSHIP
+  - MENTOR_SESSION
+
+MessageType enum:
+  - TEXT
+  - IMAGE
+  - FILE
+  - SYSTEM
+
+MessagePermission enum (UserSettings.allowMessagesFrom):
+  - EVERYONE        — Anyone can message this user
+  - CONNECTIONS      — Only connected users can message (DEFAULT)
+  - NO_ONE           — Nobody can message this user
+
+================================================================================
+API QUICK REFERENCE
+================================================================================
+
+# CONVERSATIONS
+| Endpoint                                    | Method | Purpose                               |
+|---------------------------------------------|--------|---------------------------------------|
+| /conversation                               | POST   | Create or get existing conversation   |
+| /conversations                              | GET    | List all your conversations           |
+| /conversations/unread-count                 | GET    | Get total unread message count        |
+| /conversation/:conversationId               | GET    | Get conversation details              |
+| /conversation/:conversationId/messages      | GET    | Get messages in a conversation        |
+| /conversation/:conversationId/message       | POST   | Send a message                        |
+| /conversation/:conversationId/read          | POST   | Mark conversation as read             |
+
+# SPECIALIZED CHAT STARTERS
+| Endpoint                                    | Method | Purpose                               |
+|---------------------------------------------|--------|---------------------------------------|
+| /chat/mentor/:mentorId                      | POST   | Start/get mentor chat                 |
+| /chat/session/:sessionId                    | POST   | Start/get session chat                |
+| /chat/mentorship/:mentorshipId              | POST   | Start/get mentorship chat             |
+
+# MESSAGE MANAGEMENT
+| Endpoint                                    | Method | Purpose                               |
+|---------------------------------------------|--------|---------------------------------------|
+| /message/:messageId                         | PUT    | Edit a message (within 5 min)         |
+| /message/:messageId                         | DELETE | Delete a message                      |
+
+# CHAT SEARCH
+| Endpoint                                    | Method | Purpose                               |
+|---------------------------------------------|--------|---------------------------------------|
+| /ecosystem/chat/search                      | GET    | Search for chat-able entities         |
+
+Note: Search endpoint is mounted at /api/ecosystem/chat/search (not under /api/ecosystem/ prefix),
+so the full URL is: {{BASE_URL}}/api/ecosystem/chat/search
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "data": {
+    "conversations": [...],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 50,
+      "totalPages": 3
+    }
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message"
+}
+
+================================================================================
+1. CREATE OR GET CONVERSATION
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/conversation
+Auth: User Token Required
+
+Purpose: Find an existing conversation with the target entity or create a new
+one. This is the primary way to start a chat with someone. Enforces message
+permissions before creating.
+
+Request Body:
+{
+  "receiverId": "cuid_user_456",            // REQUIRED — target entity ID
+  "receiverType": "USER",                    // Optional, default: "USER"
+  "senderType": "USER",                      // Optional, default: "USER"
+  "contextType": "GENERAL",                  // Optional, default: "GENERAL"
+  "contextId": null                          // Optional, for context-based chats
+}
+
+Supported receiverType values:
+- "USER" — another user
+- "STARTUP" — a startup entity
+- "PAGE" — a page entity
+- "TENANT" — a tenant/incubation entity
+- "INCUBATION_USER" — an incubation portal user
+
+Supported senderType values:
+- "USER" — sending as yourself (default)
+- "PAGE" — sending on behalf of a page you manage
+- "STARTUP" — sending on behalf of a startup you belong to
+
+Response (200):
+{
+  "success": true,
+  "message": "Conversation ready",
+  "data": {
+    "id": "cuid_conv_1",
+    "participant1Id": "cuid_user_123",
+    "participant1Type": "USER",
+    "participant2Id": "cuid_user_456",
+    "participant2Type": "USER",
+    "contextType": "GENERAL",
+    "contextId": null,
+    "isActive": true,
+    "isBlocked": false,
+    "lastMessageAt": null,
+    "unreadCount": 0,
+    "totalMessages": 0,
+    "participants": [
+      {
+        "entityId": "cuid_user_123",
+        "entityType": "USER",
+        "id": "cuid_user_123",
+        "name": "Jane Doe",
+        "avatar": "https://cdn.example.com/jane.jpg",
+        "email": "jane@example.com",
+        "type": "USER"
+      },
+      {
+        "entityId": "cuid_user_456",
+        "entityType": "USER",
+        "id": "cuid_user_456",
+        "name": "John Smith",
+        "avatar": "https://cdn.example.com/john.jpg",
+        "email": "john@example.com",
+        "type": "USER"
+      }
+    ],
+    "lastMessage": null,
+    "otherParticipants": [
+      {
+        "entityId": "cuid_user_456",
+        "entityType": "USER",
+        "id": "cuid_user_456",
+        "name": "John Smith",
+        "avatar": "https://cdn.example.com/john.jpg",
+        "type": "USER"
+      }
+    ]
+  }
+}
+
+Error (400):
+{
+  "success": false,
+  "message": "receiverId is required"
+}
+
+Error (403 — blocked):
+{
+  "success": false,
+  "message": "This user is blocked"
+}
+
+Error (403 — permission denied):
+{
+  "success": false,
+  "message": "You must be connected to message this user"
+}
+
+Error (403 — DND):
+{
+  "success": false,
+  "message": "This user does not accept messages"
+}
+
+Frontend Notes:
+- Use this endpoint when user clicks "Message" on someone's profile
+- If conversation already exists, it returns the existing one (idempotent)
+- Permission errors mean you cannot start a conversation with this person
+- "otherParticipants" is a convenience field — the other party's details
+
+================================================================================
+2. LIST CONVERSATIONS
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/conversations
+Auth: User Token Required
+
+Purpose: Get all conversations the user is part of, most recent first.
+Each conversation is enriched with participant details and last message.
+
+Query Parameters:
+- contextType (string, optional) — Filter by context: "GENERAL", "MENTORSHIP", "MENTOR_SESSION"
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Example: ?page=1&limit=20
+Example: ?contextType=MENTORSHIP&page=1
+
+Response (200):
+{
+  "success": true,
+  "data": {
+    "conversations": [
+      {
+        "id": "cuid_conv_1",
+        "participant1Id": "cuid_user_123",
+        "participant1Type": "USER",
+        "participant2Id": "cuid_user_456",
+        "participant2Type": "USER",
+        "contextType": "GENERAL",
+        "contextId": null,
+        "isActive": true,
+        "isBlocked": false,
+        "lastMessageAt": "2026-02-22T10:30:00Z",
+        "totalMessages": 42,
+        "participants": [
+          {
+            "entityId": "cuid_user_123",
+            "entityType": "USER",
+            "id": "cuid_user_123",
+            "name": "Jane Doe",
+            "avatar": "https://cdn.example.com/jane.jpg",
+            "type": "USER"
+          },
+          {
+            "entityId": "cuid_user_456",
+            "entityType": "USER",
+            "id": "cuid_user_456",
+            "name": "John Smith",
+            "avatar": "https://cdn.example.com/john.jpg",
+            "type": "USER"
+          }
+        ],
+        "lastMessage": {
+          "id": "cuid_msg_42",
+          "conversationId": "cuid_conv_1",
+          "senderId": "cuid_user_456",
+          "senderType": "USER",
+          "content": "See you tomorrow!",
+          "messageType": "TEXT",
+          "isRead": false,
+          "isEdited": false,
+          "isDeleted": false,
+          "createdAt": "2026-02-22T10:30:00Z",
+          "sender": {
+            "id": "cuid_user_456",
+            "name": "John Smith",
+            "avatar": "https://cdn.example.com/john.jpg"
+          }
+        },
+        "unreadCount": 3,
+        "otherParticipants": [
+          {
+            "entityId": "cuid_user_456",
+            "entityType": "USER",
+            "name": "John Smith",
+            "avatar": "https://cdn.example.com/john.jpg"
+          }
+        ]
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 8,
+      "totalPages": 1
+    }
+  }
+}
+
+Frontend Notes:
+- Sorted by updatedAt descending (most recently active first)
+- Use otherParticipants[0] to display the chat partner's name/avatar
+- Show unreadCount as badge on each chat list item
+- lastMessage.content may be null if the last message was deleted
+- Use contextType to create separate tabs (e.g., "Messages" | "Mentorship")
+
+================================================================================
+3. GET UNREAD COUNT
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/conversations/unread-count
+Auth: User Token Required
+
+Purpose: Get the total number of unread messages across all conversations.
+Useful for displaying a badge in the nav bar.
+
+Response (200):
+{
+  "success": true,
+  "data": {
+    "unreadCount": 7
+  }
+}
+
+Frontend Notes:
+- Poll this periodically (e.g., every 30s) or update via socket events
+
+================================================================================
+4. GET CONVERSATION DETAILS
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/conversation/:conversationId
+Auth: User Token Required
+
+Purpose: Get full details of a specific conversation with enriched participant
+info. User must be a participant in this conversation.
+
+Path Parameters:
+- conversationId (string, REQUIRED)
+
+Response (200): Same structure as a single conversation in the list above.
+
+Response (404):
+{
+  "success": false,
+  "message": "Conversation not found"
+}
+
+================================================================================
+5. GET MESSAGES
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/conversation/:conversationId/messages
+Auth: User Token Required
+
+Purpose: Get paginated messages for a conversation. Returns messages in
+CHRONOLOGICAL order (oldest first). Supports cursor-based pagination via
+before/after timestamps.
+
+Path Parameters:
+- conversationId (string, REQUIRED)
+
+Query Parameters:
+- limit (number, default: 50)
+- before (ISO string, optional) — Get messages before this timestamp
+- after (ISO string, optional) — Get messages after this timestamp
+
+Example: ?limit=50
+Example: ?before=2026-02-22T10:00:00Z&limit=50 (load older messages)
+
+Response (200):
+[
+  {
+    "id": "cuid_msg_1",
+    "conversationId": "cuid_conv_1",
+    "senderId": "cuid_user_123",
+    "senderType": "USER",
+    "content": "Hey, how are you?",
+    "messageType": "TEXT",
+    "replyToId": null,
+    "attachments": [],
+    "isRead": true,
+    "isEdited": false,
+    "editedAt": null,
+    "isDeleted": false,
+    "deletedAt": null,
+    "createdAt": "2026-02-22T09:00:00Z",
+    "updatedAt": "2026-02-22T09:00:00Z",
+    "replyTo": null,
+    "sender": {
+      "id": "cuid_user_123",
+      "name": "Jane Doe",
+      "avatar": "https://cdn.example.com/jane.jpg",
+      "type": "USER"
+    }
+  },
+  {
+    "id": "cuid_msg_2",
+    "conversationId": "cuid_conv_1",
+    "senderId": "cuid_user_456",
+    "senderType": "USER",
+    "content": "I'm great! Working on the project",
+    "messageType": "TEXT",
+    "replyToId": null,
+    "attachments": [],
+    "isRead": false,
+    "isEdited": true,
+    "editedAt": "2026-02-22T09:17:00Z",
+    "isDeleted": false,
+    "deletedAt": null,
+    "createdAt": "2026-02-22T09:15:00Z",
+    "updatedAt": "2026-02-22T09:17:00Z",
+    "replyTo": null,
+    "sender": {
+      "id": "cuid_user_456",
+      "name": "John Smith",
+      "avatar": "https://cdn.example.com/john.jpg",
+      "type": "USER"
+    }
+  },
+  {
+    "id": "cuid_msg_3",
+    "conversationId": "cuid_conv_1",
+    "senderId": "cuid_user_123",
+    "senderType": "USER",
+    "content": null,
+    "messageType": "TEXT",
+    "isDeleted": true,
+    "deletedAt": "2026-02-22T09:25:00Z",
+    "createdAt": "2026-02-22T09:20:00Z",
+    "sender": {
+      "id": "cuid_user_123",
+      "name": "Jane Doe",
+      "avatar": "https://cdn.example.com/jane.jpg",
+      "type": "USER"
+    }
+  }
+]
+
+Response (404):
+{
+  "success": false,
+  "message": "Conversation not found"
+}
+
+Frontend Notes:
+- Messages are in CHRONOLOGICAL order
+- Right-align messages where senderId === currentUser.id
+- isEdited: true → show "(edited)" label next to timestamp
+- isDeleted: true → show "This message was deleted" in a grey style
+- content: null → the message was deleted
+- replyTo object present when message is a reply (show quoted text)
+- For infinite scroll: use before=firstMessage.createdAt to load older
+- attachments: array of attachment objects (may contain URLs)
+
+================================================================================
+6. SEND MESSAGE (REST)
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/conversation/:conversationId/message
+Auth: User Token Required
+
+Purpose: Send a message in a conversation. For real-time use the Socket.IO
+approach instead (see below). This REST endpoint is useful for file uploads
+or when socket is unavailable.
+
+Path Parameters:
+- conversationId (string, REQUIRED)
+
+Request Body:
+{
+  "content": "Hello, how can I help?",
+  "messageType": "TEXT",                    // Optional, default: "TEXT"
+  "senderType": "USER",                     // Optional, default: "USER"
+  "replyToId": "cuid_msg_1",               // Optional, for reply threads
+  "attachments": [                          // Optional, for file messages
+    { "url": "https://...", "name": "file.pdf", "type": "application/pdf" }
+  ]
+}
+
+Supported messageType: "TEXT", "IMAGE", "FILE", "SYSTEM"
+
+Response (201):
+{
+  "success": true,
+  "message": "Message sent",
+  "data": {
+    "id": "cuid_msg_new",
+    "conversationId": "cuid_conv_1",
+    "senderId": "cuid_user_123",
+    "senderType": "USER",
+    "content": "Hello, how can I help?",
+    "messageType": "TEXT",
+    "isRead": false,
+    "isEdited": false,
+    "isDeleted": false,
+    "createdAt": "2026-02-22T11:00:00Z",
+    "sender": {
+      "id": "cuid_user_123",
+      "name": "Jane Doe",
+      "avatar": "https://cdn.example.com/jane.jpg",
+      "type": "USER"
+    }
+  }
+}
+
+Error (404):
+{
+  "success": false,
+  "message": "Conversation not found"
+}
+
+Error (403 — blocked conversation):
+{
+  "success": false,
+  "message": "This conversation is blocked"
+}
+
+================================================================================
+7. MARK AS READ
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/conversation/:conversationId/read
+Auth: User Token Required
+
+Purpose: Reset unread counter for the current user in this conversation.
+
+Path Parameters:
+- conversationId (string, REQUIRED)
+
+Response (200):
+{
+  "success": true,
+  "message": "Marked as read"
+}
+
+Frontend Notes:
+- Call this when user opens a conversation or scrolls to bottom
+- Also emit "mark-read" via Socket.IO for real-time update
+
+================================================================================
+8. EDIT MESSAGE
+================================================================================
+
+Method: PUT
+URL: {{BASE_URL}}/api/ecosystem/message/:messageId
+Auth: User Token Required
+
+Purpose: Edit a message you sent. Only allowed within 5 minutes of sending.
+After 5 minutes, returns an error.
+
+Path Parameters:
+- messageId (string, REQUIRED)
+
+Request Body:
+{
+  "content": "Updated message text"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Message updated",
+  "data": {
+    "id": "cuid_msg_1",
+    "content": "Updated message text",
+    "isEdited": true,
+    "editedAt": "2026-02-22T09:04:00Z",
+    ...
+  }
+}
+
+Error (404):
+{
+  "success": false,
+  "message": "Message not found or you cannot edit this message"
+}
+
+Error (400 — time limit):
+{
+  "success": false,
+  "message": "Messages can only be edited within 5 minutes of sending"
+}
+
+================================================================================
+9. DELETE MESSAGE
+================================================================================
+
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/message/:messageId
+Auth: User Token Required
+
+Purpose: Soft-delete a message you sent. Content is set to null, isDeleted
+set to true. Other users see "This message was deleted".
+
+Path Parameters:
+- messageId (string, REQUIRED)
+
+Response (200):
+{
+  "success": true,
+  "message": "Message deleted"
+}
+
+Error (404):
+{
+  "success": false,
+  "message": "Message not found or you cannot delete this message"
+}
+
+================================================================================
+10. START MENTOR CHAT
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/chat/mentor/:mentorId
+Auth: User Token Required
+
+Purpose: Start or get an existing chat with a mentor. Uses mentorProfile ID
+(not User ID). Creates a conversation with contextType="MENTORSHIP".
+
+Path Parameters:
+- mentorId (string, REQUIRED) — MentorProfile.id
+
+Response (201):
+{
+  "success": true,
+  "message": "Chat started",
+  "data": {
+    "id": "cuid_conv_mentor",
+    "participant1Type": "USER",
+    "participant1Id": "cuid_user_123",
+    "participant2Type": "USER",
+    "participant2Id": "cuid_mentor_user_id",
+    "contextType": "MENTORSHIP",
+    "contextId": null,
+    "participants": [...],
+    "lastMessage": null,
+    "unreadCount": 0,
+    "otherParticipants": [
+      {
+        "entityId": "cuid_mentor_user_id",
+        "name": "Dr. John Smith",
+        "avatar": "https://...",
+        "type": "USER"
+      }
+    ]
+  }
+}
+
+Error (404):
+{
+  "success": false,
+  "message": "Mentor not found"
+}
+
+================================================================================
+11. START SESSION CHAT
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/chat/session/:sessionId
+Auth: User Token Required
+
+Purpose: Start or get a chat for a specific mentor session. Creates a
+conversation with contextType="MENTOR_SESSION" and contextId=sessionId.
+User must be either the mentee or the mentor for this session.
+
+Path Parameters:
+- sessionId (string, REQUIRED) — MentorSession.id
+
+Response (201): Same structure as mentor chat with contextType="MENTOR_SESSION"
+and contextId set to the sessionId.
+
+Error (404):
+{
+  "success": false,
+  "message": "Session not found"
+}
+
+================================================================================
+12. START MENTORSHIP CHAT
+================================================================================
+
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/chat/mentorship/:mentorshipId
+Auth: User Token Required
+
+Purpose: Start or get a chat for a mentorship relationship. Creates a
+conversation with contextType="MENTORSHIP" and contextId=mentorshipId.
+Also links the conversation back to the Mentorship record.
+
+Path Parameters:
+- mentorshipId (string, REQUIRED) — Mentorship.id
+
+Response (201): Same structure as mentor chat with contextId=mentorshipId.
+
+Error (403):
+{
+  "success": false,
+  "message": "Not authorized"
+}
+
+Error (404):
+{
+  "success": false,
+  "message": "Mentorship not found"
+}
+
+================================================================================
+13. CHAT SEARCH
+================================================================================
+
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/chat/search
+Auth: User Token Required
+
+Purpose: Search for entities to start a chat with. Results are ranked by
+relationship proximity:
+  Connected users > Following > Followers > Mutual connections > Previously messaged > Others
+
+Query Parameters:
+- q (string, optional) — Search query (name, email)
+- filter (string, optional) — Entity type filter:
+    "USER" (default) — Search users
+    "PAGE" — Search pages
+    "STARTUP" — Search startups
+    "INCUBATION" — Search tenants/incubations
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Example: ?q=john&filter=USER&page=1&limit=20
+
+Response (200 — USER filter):
+{
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "id": "cuid_user_1",
+        "type": "USER",
+        "name": "John Smith",
+        "avatar": "https://cdn.example.com/john.jpg",
+        "proximityScore": 5,
+        "proximityLabel": "Connected",
+        "canMessage": true
+      },
+      {
+        "id": "cuid_user_2",
+        "type": "USER",
+        "name": "John Doe",
+        "avatar": null,
+        "proximityScore": 4,
+        "proximityLabel": "Following",
+        "canMessage": false
+      },
+      {
+        "id": "cuid_user_3",
+        "type": "USER",
+        "name": "Johnny Walker",
+        "avatar": null,
+        "proximityScore": 2,
+        "proximityLabel": "Mutual connection",
+        "canMessage": false
+      }
+    ],
+    "total": 15,
+    "page": 1,
+    "limit": 20
+  }
+}
+
+Response (200 — PAGE filter):
+{
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "id": "cuid_page_1",
+        "type": "PAGE",
+        "name": "Tech Community",
+        "avatar": "https://...",
+        "pageType": "COMMUNITY",
+        "tagline": "Building the future together",
+        "followerCount": 1520,
+        "proximityScore": 5,
+        "proximityLabel": "Your Page",
+        "canMessage": true
+      },
+      {
+        "id": "cuid_page_2",
+        "type": "PAGE",
+        "name": "AI Research Hub",
+        "avatar": "https://...",
+        "pageType": "STARTUP",
+        "tagline": "AI for everyone",
+        "followerCount": 890,
+        "proximityScore": 4,
+        "proximityLabel": "Following",
+        "canMessage": true
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 20
+  }
+}
+
+Proximity Scoring:
+  5 = Connected / Your Page / Member
+  4 = Following
+  3 = Follower
+  2 = Mutual connection
+  1 = Previously messaged
+  0 = Other
+
+Frontend Notes:
+- Results are pre-sorted by proximityScore (highest first)
+- canMessage: false → show a lock icon or tooltip explaining why
+- proximityLabel explains the relationship to the user
+- Use filter tabs: Users | Pages | Startups | Incubations
+- When canMessage: true and user clicks → POST /conversation (section 1)
+- Blocked users are automatically excluded from results
+
+================================================================================
+SOCKET.IO — REAL-TIME UNIVERSAL CHAT
+================================================================================
+
+Namespace: /chat
+Transport: WebSocket with polling fallback
+
+--------------------------------------------------------------------------------
+CONNECTION & AUTHENTICATION
+--------------------------------------------------------------------------------
+
+Connect to the /chat namespace:
+  const socket = io("{{SERVER_URL}}/chat", {
+    auth: { token: "Bearer <user_jwt_token>" }
+  });
+
+On successful connection:
+- User auto-joins room "user:{userId}"
+- Console log: "User Jane Doe connected to chat"
+
+On auth failure:
+  socket.on("connect_error", (err) => {
+    console.error(err.message); // "Authentication error: ..."
+  });
+
+--------------------------------------------------------------------------------
+EMIT EVENTS (Frontend → Server)
+--------------------------------------------------------------------------------
+
+1. JOIN CONVERSATION
+   Event: "join-conversation"
+   Payload: "cuid_conv_1" (conversationId string)
+
+   Notes:
+   - Must join a conversation room to receive real-time messages
+   - Verifies user is a participant (participant1Id or participant2Id)
+   - Call this when user opens a conversation
+
+   Response Event: "joined-conversation"
+   Response Payload:
+   {
+     "conversationId": "cuid_conv_1"
+   }
+
+   Error Event: "error"
+   Payload: { "message": "Conversation not found or access denied" }
+
+2. SEND MESSAGE
+   Event: "send-message"
+   Payload:
+   {
+     "conversationId": "cuid_conv_1",
+     "content": "Hello!",
+     "messageType": "TEXT",               // Optional, default: "TEXT"
+     "replyToId": "cuid_msg_1",           // Optional, for replies
+     "attachments": [...]                  // Optional, for files
+   }
+
+   Notes:
+   - Content or attachments required (at least one)
+   - Verifies user is participant
+   - Message emitted to the conversation room + sender
+
+   Response Event: "message-sent" (to sender)
+   Response Payload:
+   {
+     "id": "cuid_msg_new",
+     "conversationId": "cuid_conv_1",
+     "senderId": "cuid_user_123",
+     "senderType": "USER",
+     "content": "Hello!",
+     "messageType": "TEXT",
+     "isRead": false,
+     "isEdited": false,
+     "isDeleted": false,
+     "createdAt": "2026-02-22T11:00:00Z",
+     "sender": {
+       "id": "cuid_user_123",
+       "name": "Jane Doe",
+       "avatar": "https://cdn.example.com/jane.jpg",
+       "type": "USER"
+     }
+   }
+
+3. TYPING
+   Event: "typing"
+   Payload:
+   {
+     "conversationId": "cuid_conv_1",
+     "isTyping": true
+   }
+
+4. MARK READ
+   Event: "mark-read"
+   Payload:
+   {
+     "conversationId": "cuid_conv_1"
+   }
+
+5. DELETE MESSAGE
+   Event: "delete-message"
+   Payload:
+   {
+     "messageId": "cuid_msg_1"
+   }
+
+   Response Event: "message-deleted"
+   Payload:
+   {
+     "messageId": "cuid_msg_1",
+     "conversationId": "cuid_conv_1"
+   }
+
+6. EDIT MESSAGE
+   Event: "edit-message"
+   Payload:
+   {
+     "messageId": "cuid_msg_1",
+     "content": "Updated text"
+   }
+
+   Response Event: "message-edited"
+   Payload:
+   {
+     "id": "cuid_msg_1",
+     "content": "Updated text",
+     "isEdited": true,
+     "editedAt": "2026-02-22T11:02:00Z"
+   }
+
+--------------------------------------------------------------------------------
+LISTEN EVENTS (Server → Frontend)
+--------------------------------------------------------------------------------
+
+1. NEW MESSAGE
+   Event: "new-message"
+   Payload: Full enriched message object (same as "message-sent")
+   Notes:
+   - Received by ALL users in the conversation room EXCEPT the sender
+   - Update your chat list and active conversation
+
+2. USER TYPING
+   Event: "user-typing"
+   Payload:
+   {
+     "conversationId": "cuid_conv_1",
+     "userId": "cuid_user_456",
+     "userName": "John Smith",
+     "isTyping": true
+   }
+
+3. MESSAGE DELETED
+   Event: "message-deleted"
+   Payload:
+   {
+     "messageId": "cuid_msg_1",
+     "conversationId": "cuid_conv_1"
+   }
+   Notes: Update the message in your local state to show "deleted"
+
+4. MESSAGE EDITED
+   Event: "message-edited"
+   Payload:
+   {
+     "id": "cuid_msg_1",
+     "content": "Updated text",
+     "isEdited": true,
+     "editedAt": "2026-02-22T11:02:00Z"
+   }
+   Notes: Update the message content in your local state
+
+5. MESSAGES READ
+   Event: "messages-read"
+   Payload:
+   {
+     "conversationId": "cuid_conv_1",
+     "readBy": "cuid_user_456"
+   }
+
+6. ERROR
+   Event: "error"
+   Payload: { "message": "Error description" }
+
+7. MESSAGE SENT CONFIRMATION
+   Event: "message-sent"
+   Payload: Full message object
+
+8. JOINED CONVERSATION
+   Event: "joined-conversation"
+   Payload: { "conversationId": "..." }
+
+================================================================================
+MESSAGE PERMISSION RULES
+================================================================================
+
+When a USER tries to message another USER:
+
+1. BLOCK CHECK
+   - If either user has blocked the other → 403 "This user is blocked"
+   - Blocked users don't appear in search results
+
+2. PRIVACY SETTINGS CHECK (receiver's UserSettings.allowMessagesFrom)
+   - "EVERYONE" → allowed
+   - "CONNECTIONS" (default) → only if connected (accepted connection)
+   - "NO_ONE" → 403 "This user does not accept messages"
+
+3. CONNECTION CHECK (when permission is CONNECTIONS)
+   - Must have an ACCEPTED Connection between the two users
+   - Pending connections are NOT sufficient
+
+4. CONTEXT BYPASS
+   - Mentorship and Session chats ALWAYS bypass permission checks
+   - Entity-based chats (non USER→USER) bypass permission checks
+
+================================================================================
+COMPLETE FRONTEND FLOWS
+================================================================================
+
+Flow 1: Chat List Page
+  1. GET /api/ecosystem/conversations?page=1&limit=20
+  2. GET /api/ecosystem/conversations/unread-count
+  3. Render chat list with otherParticipants[0] name/avatar
+  4. Show unreadCount badge per conversation
+  5. Show lastMessage.content (or "Message deleted" if content is null)
+  6. Connect to Socket.IO /chat namespace
+  7. Listen for "new-message" events to update list in real-time
+
+Flow 2: Open a Conversation
+  1. Navigate to conversation by ID
+  2. Socket emit "join-conversation" with conversationId
+  3. GET /api/ecosystem/conversation/:conversationId/messages?limit=50
+  4. POST /api/ecosystem/conversation/:conversationId/read
+  5. Socket emit "mark-read" { conversationId }
+  6. Render messages (right-align own, left-align other)
+  7. For deleted messages → show "This message was deleted"
+  8. For edited messages → show "(edited)" label
+
+Flow 3: Send a Message
+  1. User types and hits send
+  2. Socket emit "send-message" { conversationId, content }
+  3. Listen "message-sent" → optimistically add to chat
+  4. Other party receives "new-message" in their room
+
+Flow 4: Start a New Chat
+  1. GET /api/ecosystem/chat/search?q=name&filter=USER
+  2. Show results with canMessage indicator
+  3. canMessage: false → tooltip "You must be connected" or similar
+  4. canMessage: true → POST /api/ecosystem/conversation
+  5. Navigate to the returned conversation
+  6. Proceed with Flow 2
+
+Flow 5: Mentor / Session / Mentorship Chats
+  1. From mentor profile: POST /api/ecosystem/chat/mentor/:mentorId
+  2. From session page: POST /api/ecosystem/chat/session/:sessionId
+  3. From mentorship: POST /api/ecosystem/chat/mentorship/:mentorshipId
+  4. All return a conversation → proceed with Flow 2
+
+Flow 6: Message Actions
+  A) Reply to message:
+     - Socket emit "send-message" { conversationId, content, replyToId }
+     - Show quoted text above the reply
+
+  B) Edit message (within 5 min):
+     - Socket emit "edit-message" { messageId, content }
+     - OR: PUT /api/ecosystem/message/:messageId { content }
+     - Other party receives "message-edited"
+
+  C) Delete message:
+     - Socket emit "delete-message" { messageId }
+     - OR: DELETE /api/ecosystem/message/:messageId
+     - Other party receives "message-deleted"
+
+Flow 7: Typing Indicators
+  1. On input change → emit "typing" { conversationId, isTyping: true }
+  2. On stop typing (debounce 1s) → emit "typing" { conversationId, isTyping: false }
+  3. Listen "user-typing" → show/hide "{name} is typing..."

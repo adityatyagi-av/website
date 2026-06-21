@@ -1,0 +1,963 @@
+================================================================================
+OFFICE RECEIVER API - STARTUP PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 2.0.0
+Last Updated: 2026-01-18
+Base URL: /api/startup-portal/office
+
+Authentication: User Bearer Token (authenticate middleware)
+Note: User must be associated with a startup (have startupId)
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# BROWSE OFFICES (Discover available office spaces)
+| Endpoint                              | Method | Purpose                                          |
+|---------------------------------------|--------|--------------------------------------------------|
+| /office/browse                        | GET    | Browse available offices with filters            |
+| /office/browse/:officeId              | GET    | Get office details with pricing options          |
+| /office/browse/:officeId/availability | GET    | Check if office available for date range         |
+| /office/browse/:officeId/calendar     | GET    | Get monthly calendar view                        |
+| /office/browse/:officeId/pricing      | GET    | Get all pricing options for office               |
+
+# REQUESTS (Request office from incubator)
+| Endpoint                             | Method | Purpose                                           |
+|--------------------------------------|--------|---------------------------------------------------|
+| /office/requests                     | POST   | Create office request to incubator                |
+| /office/requests                     | GET    | List my requests with status                      |
+| /office/requests/:requestId          | GET    | Get request details                               |
+| /office/requests/:requestId/cancel   | POST   | Cancel pending request                            |
+
+# BOOKINGS (Direct bookings and approved requests)
+| Endpoint                            | Method | Purpose                                            |
+|-------------------------------------|--------|----------------------------------------------------|
+| /office/bookings/direct             | POST   | Create direct booking (no approval needed)         |
+| /office/bookings                    | GET    | List my bookings                                   |
+| /office/bookings/:bookingId         | GET    | Get booking details with payments                  |
+| /office/bookings/:bookingId/cancel  | POST   | Cancel booking                                     |
+
+# PAYMENTS (Pay for bookings)
+| Endpoint                             | Method | Purpose                                           |
+|--------------------------------------|--------|---------------------------------------------------|
+| /office/payments/initiate            | POST   | Start Razorpay payment for booking                |
+| /office/payments/verify              | POST   | Verify payment after Razorpay callback            |
+| /office/payments                     | GET    | List my payment history                           |
+| /office/payments/:paymentId          | GET    | Get payment details                               |
+| /office/payments/:paymentId/invoice  | GET    | Get invoice for completed payment                 |
+
+# MY OFFICES (Current allocations and bookings)
+| Endpoint                    | Method | Purpose                                                |
+|-----------------------------|--------|--------------------------------------------------------|
+| /office/my/current          | GET    | Get currently active offices (allocations + bookings)  |
+| /office/my/history          | GET    | Get complete office history                            |
+
+# DASHBOARD
+| Endpoint             | Method | Purpose                                                      |
+|----------------------|--------|--------------------------------------------------------------|
+| /office/dashboard    | GET    | Get summary: active/upcoming bookings, pending payments      |
+
+# WEBHOOKS
+| Endpoint                    | Method | Purpose                                                 |
+|-----------------------------|--------|---------------------------------------------------------|
+| /office/webhooks/razorpay   | POST   | Handle Razorpay payment/refund webhooks (no auth)       |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+OfficeStatus:
+- AVAILABLE
+- OCCUPIED
+- MAINTENANCE
+- INACTIVE
+
+OfficeRequestStatus:
+- PENDING
+- APPROVED
+- REJECTED
+- CANCELLED
+
+OfficePricingType:
+- HOURLY
+- DAILY
+- WEEKLY
+- MONTHLY
+- YEARLY
+
+OfficeVisibility:
+- PUBLIC           (visible to all)
+- TENANT_ONLY      (visible only to startups in that tenant)
+- PRIVATE          (invite only - future)
+
+OfficeBookingStatus:
+- PENDING_PAYMENT
+- CONFIRMED
+- ACTIVE
+- COMPLETED
+- CANCELLED
+
+OfficePaymentStatus:
+- PENDING
+- PROCESSING
+- COMPLETED
+- FAILED
+- REFUNDED
+
+OfficePaymentType:
+- BOOKING
+- RENT
+- SECURITY_DEPOSIT
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 10
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. BROWSE OFFICES
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 BROWSE AVAILABLE OFFICES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/browse
+Auth: User Token Required
+
+Purpose: Browse all available office spaces with comprehensive filtering. Shows PUBLIC 
+offices and TENANT_ONLY offices from your incubator.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10, max: 100)
+- search (string) - Search by name, location, description
+- location (string) - Filter by location
+- minCapacity (number) - Minimum capacity
+- maxCapacity (number) - Maximum capacity
+- officeType (string) - Filter by type
+- amenities (string) - Comma-separated amenities
+- pricingType ("HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY")
+- minPrice (number) - Minimum price
+- maxPrice (number) - Maximum price
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+
+Example: ?search=conference&pricingType=MONTHLY&minCapacity=10&maxPrice=50000
+
+Response (200):
+{
+  "success": true,
+  "message": "Offices fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_office_123",
+        "name": "Conference Room A",
+        "location": "Building 1, Floor 2",
+        "size": 500,
+        "capacity": 20,
+        "officeType": "CONFERENCE_ROOM",
+        "description": "Modern conference room with AV equipment",
+        "amenities": ["WiFi", "Projector", "Whiteboard"],
+        "images": ["https://..."],
+        "status": "AVAILABLE",
+        "visibility": "PUBLIC",
+        "pricingOptions": [
+          {
+            "id": "cuid_pricing_1",
+            "pricingType": "MONTHLY",
+            "amount": 15000,
+            "currency": "INR",
+            "securityDeposit": 30000
+          }
+        ],
+        "tenant": {
+          "id": "cuid_tenant_123",
+          "organizationName": "Innovation Hub",
+          "tenantLogo": "https://..."
+        }
+      }
+    ],
+    "total": 25,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 3
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET OFFICE DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/browse/:officeId
+Auth: User Token Required
+
+Purpose: Get complete details of a single office including all pricing options.
+
+Response (200):
+{
+  "success": true,
+  "message": "Office details fetched",
+  "data": {
+    "id": "cuid_office_123",
+    "name": "Conference Room A",
+    "location": "Building 1, Floor 2",
+    "size": 500,
+    "capacity": 20,
+    "officeType": "CONFERENCE_ROOM",
+    "description": "Modern conference room with AV equipment",
+    "amenities": ["WiFi", "Projector", "Whiteboard", "AC"],
+    "images": ["https://..."],
+    "monthlyRate": 15000,
+    "status": "AVAILABLE",
+    "pricingOptions": [...],
+    "allocations": [...],
+    "tenant": { "id": "...", "organizationName": "..." }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 CHECK OFFICE AVAILABILITY
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/browse/:officeId/availability
+Auth: User Token Required
+
+Purpose: Check if office is available for your desired date range.
+
+Query Parameters:
+- startDate (string, required) - ISO date string
+- endDate (string, optional) - ISO date string
+
+Example: ?startDate=2026-02-01&endDate=2026-02-28
+
+Response (200):
+{
+  "success": true,
+  "message": "Availability fetched",
+  "data": {
+    "isAvailable": true,
+    "conflictingBookings": [],
+    "allocationConflicts": [],
+    "nextAvailableDate": null
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 GET OFFICE CALENDAR
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/browse/:officeId/calendar
+Auth: User Token Required
+
+Purpose: Get monthly calendar view showing booked/available dates.
+
+Query Parameters:
+- month (number, required) - 1-12
+- year (number, required) - e.g., 2026
+
+Example: ?month=2&year=2026
+
+Response (200):
+{
+  "success": true,
+  "message": "Calendar fetched",
+  "data": {
+    "officeId": "cuid_office_123",
+    "month": 2,
+    "year": 2026,
+    "bookings": [
+      {
+        "id": "...",
+        "startDate": "2026-02-05",
+        "endDate": "2026-02-15",
+        "status": "CONFIRMED"
+      }
+    ],
+    "allocations": []
+  }
+}
+
+--------------------------------------------------------------------------------
+1.5 GET OFFICE PRICING
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/browse/:officeId/pricing
+Auth: User Token Required
+
+Purpose: Get all active pricing tiers for an office to compare options.
+
+Response (200):
+{
+  "success": true,
+  "message": "Pricing options fetched",
+  "data": [
+    {
+      "id": "cuid_pricing_1",
+      "pricingType": "HOURLY",
+      "amount": 500,
+      "currency": "INR",
+      "securityDeposit": 1000,
+      "minimumDuration": 2,
+      "discountPercentage": 10
+    },
+    {
+      "id": "cuid_pricing_2",
+      "pricingType": "MONTHLY",
+      "amount": 15000,
+      "currency": "INR",
+      "securityDeposit": 30000
+    }
+  ]
+}
+
+================================================================================
+2. OFFICE REQUESTS
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 CREATE OFFICE REQUEST
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/requests
+Auth: User Token Required
+
+Purpose: Submit a request to an incubator for office space. Request goes to the 
+office provider for approval.
+
+Request Body:
+{
+  "officeId": "cuid_office_123",
+  "startupId": "cuid_startup_456",       // Optional - pass explicitly if needed
+  "desiredStartDate": "2026-02-01",
+  "desiredEndDate": "2026-06-01",
+  "pricingType": "MONTHLY",
+  "purpose": "Team expansion - need dedicated workspace",
+  "notes": "We prefer a quiet space for coding work"
+}
+
+Note: startupId can be passed in body, query param, or will be resolved from 
+token/database. Priority: body > query > token > DB lookup.
+
+Response (201):
+{
+  "success": true,
+  "message": "Request created",
+  "data": {
+    "id": "cuid_request_1",
+    "officeId": "cuid_office_123",
+    "requesterType": "STARTUP",
+    "requesterId": "cuid_startup_456",
+    "status": "PENDING",
+    "desiredStartDate": "2026-02-01",
+    "desiredEndDate": "2026-06-01",
+    "pricingType": "MONTHLY",
+    "estimatedAmount": 60000,
+    "purpose": "Team expansion - need dedicated workspace",
+    "office": { "id": "...", "name": "...", "pricingOptions": [...] },
+    "startup": { "id": "...", "name": "...", "logoUrl": "..." }
+  }
+}
+
+--------------------------------------------------------------------------------
+2.2 GET MY REQUESTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/requests
+Auth: User Token Required
+
+Purpose: List all office requests submitted by your startup.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- startupId (string, optional) - Pass explicitly if needed
+- status ("PENDING" | "APPROVED" | "REJECTED" | "CANCELLED")
+
+Response (200):
+{
+  "success": true,
+  "message": "Requests fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_request_1",
+        "status": "PENDING",
+        "desiredStartDate": "2026-02-01",
+        "desiredEndDate": "2026-06-01",
+        "pricingType": "MONTHLY",
+        "estimatedAmount": 60000,
+        "office": {
+          "id": "...",
+          "name": "Conference Room A",
+          "location": "Building 1",
+          "images": [...],
+          "tenant": { "organizationName": "Innovation Hub" }
+        },
+        "booking": null,
+        "requestedAt": "2026-01-17T10:00:00Z"
+      }
+    ],
+    "total": 3,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+2.3 GET REQUEST DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/requests/:requestId
+Auth: User Token Required
+
+Purpose: Get full details of a specific request.
+
+Response (200):
+{
+  "success": true,
+  "message": "Request details fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+2.4 CANCEL REQUEST
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/requests/:requestId/cancel
+Auth: User Token Required
+
+Purpose: Cancel a pending request. Can only cancel PENDING requests.
+
+Response (200):
+{
+  "success": true,
+  "message": "Request cancelled",
+  "data": {
+    "id": "...",
+    "status": "CANCELLED"
+  }
+}
+
+================================================================================
+3. BOOKINGS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 CREATE DIRECT BOOKING
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/bookings/direct
+Auth: User Token Required
+
+Purpose: Create a direct booking without approval (for public offices with direct 
+booking enabled). Creates PENDING_PAYMENT booking.
+
+Request Body:
+{
+  "officeId": "cuid_office_123",
+  "pricingId": "cuid_pricing_1",
+  "startupId": "cuid_startup_456",    // Optional - pass explicitly if needed
+  "startDate": "2026-02-01",
+  "endDate": "2026-02-28",
+  "notes": "Monthly rental for February"
+}
+
+Note: startupId priority: body > query > token > DB lookup.
+
+Response (201):
+{
+  "success": true,
+  "message": "Booking created",
+  "data": {
+    "id": "cuid_booking_1",
+    "officeId": "cuid_office_123",
+    "startupId": "cuid_startup_456",
+    "pricingId": "cuid_pricing_1",
+    "startDate": "2026-02-01",
+    "endDate": "2026-02-28",
+    "pricingType": "MONTHLY",
+    "baseAmount": 15000,
+    "totalAmount": 15000,
+    "securityDeposit": 30000,
+    "status": "PENDING_PAYMENT",
+    "isPaymentRequired": true,
+    "office": { "id": "...", "name": "...", "location": "..." },
+    "pricing": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 GET MY BOOKINGS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/bookings
+Auth: User Token Required
+
+Purpose: List all bookings for your startup.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- startupId (string, optional) - Pass explicitly if needed
+- officeId (string) - Filter by office
+- status ("PENDING_PAYMENT" | "CONFIRMED" | "ACTIVE" | "COMPLETED" | "CANCELLED")
+- startDate (string) - Filter by start date
+- endDate (string) - Filter by end date
+
+Response (200):
+{
+  "success": true,
+  "message": "Bookings fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_booking_1",
+        "status": "ACTIVE",
+        "startDate": "2026-02-01",
+        "endDate": "2026-02-28",
+        "totalAmount": 15000,
+        "isPaid": true,
+        "office": {
+          "id": "...",
+          "name": "Conference Room A",
+          "location": "Building 1",
+          "tenant": { "organizationName": "..." }
+        },
+        "bookerStartup": { "id": "...", "name": "...", "logoUrl": "..." },
+        "pricing": { ... },
+        "payments": [...]
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+3.3 GET BOOKING DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/bookings/:bookingId
+Auth: User Token Required
+
+Purpose: Get complete booking details with payments and allocation status.
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking details fetched",
+  "data": {
+    "id": "cuid_booking_1",
+    "officeId": "...",
+    "startupId": "...",
+    "status": "PENDING_PAYMENT",
+    "startDate": "...",
+    "endDate": "...",
+    "totalAmount": 15000,
+    "securityDeposit": 30000,
+    "isPaymentRequired": true,
+    "isPaid": false,
+    "office": { ... },
+    "bookerStartup": { ... },
+    "request": { ... },
+    "pricing": { ... },
+    "payments": [],
+    "allocation": null
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 CANCEL BOOKING
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/bookings/:bookingId/cancel
+Auth: User Token Required
+
+Purpose: Cancel a booking. Cannot cancel COMPLETED or already CANCELLED bookings.
+
+Request Body:
+{
+  "cancellationReason": "Change in business plans"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Booking cancelled",
+  "data": {
+    "id": "...",
+    "status": "CANCELLED",
+    "cancelledAt": "2026-01-17T..."
+  }
+}
+
+================================================================================
+4. PAYMENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 INITIATE PAYMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/payments/initiate
+Auth: User Token Required
+
+Purpose: Start Razorpay payment for a booking. Use returned data to initialize 
+Razorpay checkout on frontend.
+
+Request Body:
+{
+  "bookingId": "cuid_booking_1",
+  "paymentType": "BOOKING"
+}
+
+Payment Types:
+- BOOKING: Main booking amount
+- SECURITY_DEPOSIT: Security deposit
+- RENT: Monthly rent payment
+
+Response (200):
+{
+  "success": true,
+  "message": "Payment initiated",
+  "data": {
+    "paymentId": "cuid_payment_1",
+    "razorpayOrderId": "order_xxxxxxxxxxxx",
+    "amount": 1500000,
+    "currency": "INR",
+    "bookingId": "cuid_booking_1",
+    "key": "rzp_test_xxxxxxxxxx"
+  }
+}
+
+Note: Amount is in paise (multiply by 100).
+
+--------------------------------------------------------------------------------
+4.2 VERIFY PAYMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/payments/verify
+Auth: User Token Required
+
+Purpose: Verify payment after successful Razorpay callback. Call this after 
+Razorpay payment completion.
+
+Request Body:
+{
+  "paymentId": "cuid_payment_1",
+  "razorpayPaymentId": "pay_xxxxxxxxxxxx",
+  "razorpaySignature": "signature_hash_string"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Payment verified",
+  "data": {
+    "paymentId": "cuid_payment_1",
+    "status": "COMPLETED",
+    "bookingId": "cuid_booking_1",
+    "bookingStatus": "CONFIRMED",
+    "invoiceNumber": "INV-OFF-1737148200000"
+  }
+}
+
+--------------------------------------------------------------------------------
+4.3 GET MY PAYMENTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/payments
+Auth: User Token Required
+
+Purpose: List all payments made by your startup.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- bookingId (string) - Filter by booking
+- status ("PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "REFUNDED")
+
+Response (200):
+{
+  "success": true,
+  "message": "Payments fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_payment_1",
+        "amount": 15000,
+        "currency": "INR",
+        "status": "COMPLETED",
+        "paymentType": "BOOKING",
+        "paidAt": "2026-01-17T...",
+        "invoiceNumber": "INV-OFF-...",
+        "booking": {
+          "id": "...",
+          "startDate": "...",
+          "endDate": "...",
+          "office": { "name": "...", "location": "..." },
+          "bookerStartup": { "name": "..." }
+        }
+      }
+    ],
+    "total": 3,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+4.4 GET PAYMENT DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/payments/:paymentId
+Auth: User Token Required
+
+Purpose: Get full payment details.
+
+Response (200):
+{
+  "success": true,
+  "message": "Payment details fetched",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+4.5 GET INVOICE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/payments/:paymentId/invoice
+Auth: User Token Required
+
+Purpose: Get invoice for a completed payment.
+
+Response (200):
+{
+  "success": true,
+  "message": "Invoice fetched",
+  "data": {
+    "invoiceNumber": "INV-OFF-1737148200000",
+    "invoiceUrl": null,
+    "paymentId": "cuid_payment_1",
+    "amount": 15000,
+    "currency": "INR",
+    "paymentType": "BOOKING",
+    "paidAt": "2026-01-17T...",
+    "booking": { ... }
+  }
+}
+
+================================================================================
+5. MY OFFICES
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 GET MY CURRENT OFFICES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/my/current
+Auth: User Token Required
+
+Purpose: Get all currently active offices for your startup (both free allocations 
+and paid bookings).
+
+Response (200):
+{
+  "success": true,
+  "message": "Current offices fetched",
+  "data": {
+    "allocations": [
+      {
+        "id": "cuid_allocation_1",
+        "startDate": "2026-01-01",
+        "endDate": "2026-06-30",
+        "status": "ACTIVE",
+        "isActive": true,
+        "office": {
+          "id": "...",
+          "name": "Incubation Space A",
+          "location": "Building 1, Floor 1",
+          "pricingOptions": [...],
+          "tenant": { "organizationName": "...", "tenantLogo": "..." }
+        }
+      }
+    ],
+    "bookings": [
+      {
+        "id": "cuid_booking_1",
+        "startDate": "2026-02-01",
+        "endDate": "2026-02-28",
+        "status": "ACTIVE",
+        "totalAmount": 15000,
+        "office": {
+          "id": "...",
+          "name": "Conference Room A",
+          "tenant": { "organizationName": "..." }
+        },
+        "pricing": { ... }
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 GET MY OFFICE HISTORY
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/my/history
+Auth: User Token Required
+
+Purpose: Get complete office history (all past and current allocations/bookings).
+
+Response (200):
+{
+  "success": true,
+  "message": "Office history fetched",
+  "data": {
+    "allocations": [
+      {
+        "id": "cuid_allocation_1",
+        "startDate": "2025-06-01",
+        "endDate": "2025-12-31",
+        "status": "ENDED",
+        "isActive": false,
+        "office": { "id": "...", "name": "...", "location": "..." }
+      }
+    ],
+    "bookings": [
+      {
+        "id": "cuid_booking_1",
+        "startDate": "2025-11-01",
+        "endDate": "2025-11-30",
+        "status": "COMPLETED",
+        "totalAmount": 15000,
+        "office": { "id": "...", "name": "...", "location": "..." },
+        "payments": [...]
+      }
+    ]
+  }
+}
+
+================================================================================
+6. DASHBOARD
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 GET MY DASHBOARD
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/office/dashboard
+Auth: User Token Required
+
+Purpose: Get summary of your startup's office status and pending actions.
+
+Response (200):
+{
+  "success": true,
+  "message": "Dashboard fetched",
+  "data": {
+    "activeBookings": [
+      {
+        "id": "...",
+        "status": "ACTIVE",
+        "office": { "name": "...", "location": "..." }
+      }
+    ],
+    "upcomingBookings": [
+      {
+        "id": "...",
+        "status": "CONFIRMED",
+        "startDate": "2026-02-01",
+        "office": { "name": "...", "location": "..." }
+      }
+    ],
+    "pendingPayments": [
+      {
+        "id": "...",
+        "totalAmount": 15000,
+        "office": { "name": "..." }
+      }
+    ],
+    "allocations": [
+      {
+        "id": "...",
+        "isActive": true,
+        "office": { "name": "...", "location": "..." }
+      }
+    ],
+    "totalSpent": 45000
+  }
+}
+
+================================================================================
+7. WEBHOOKS
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 RAZORPAY WEBHOOK
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/startup-portal/office/webhooks/razorpay
+Auth: None (Razorpay signature verification)
+
+Purpose: Handle Razorpay payment events (payment captured, failed, refunded).
+This is called by Razorpay servers, not by your frontend.
+
+Request Body: (from Razorpay)
+{
+  "event": "payment.captured",
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_xxxxxxxxxxxx",
+        "order_id": "order_xxxxxxxxxxxx",
+        "status": "captured",
+        ...
+      }
+    }
+  }
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Webhook processed",
+  "data": { "status": "processed" }
+}
+
+================================================================================
+END OF RECEIVER API DOCUMENTATION
+================================================================================

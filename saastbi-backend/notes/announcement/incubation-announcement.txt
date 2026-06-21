@@ -1,0 +1,997 @@
+================================================================================
+ANNOUNCEMENT API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-03
+Base URL: /api/incubation-portal
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+
+================================================================================
+ANNOUNCEMENT MODULE FLOW
+================================================================================
+
+The Announcement module allows incubation centers to create, manage, and
+distribute announcements to their startups, mentors, and team members.
+Supports flexible targeting, priority levels, attachments, and read tracking.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
++------------------------------------------------------------------------------+
+|                      INCUBATION ANNOUNCEMENT MANAGEMENT                       |
+|                      Base: /api/incubation-portal                             |
++------------------------------------------------------------------------------+
+|  * Creates announcements for startups, mentors, and team                      |
+|  * Flexible targeting: programs, startups, mentors, roles, or individuals     |
+|  * Supports exclusions to hide from specific recipients                       |
+|  * Priority levels: LOW, MEDIUM, HIGH, URGENT                                 |
+|  * Visibility: PUBLIC, INTERNAL, TARGETED                                     |
+|  * Scope: TENANT_WIDE, PROGRAM_SPECIFIC, STARTUP_SPECIFIC, MENTOR_SPECIFIC    |
+|  * Draft/Publish workflow with email notifications                            |
+|  * Pin important announcements to top                                         |
+|  * Archive instead of delete (soft delete)                                    |
+|  * Track reads for analytics                                                  |
+|  * Activity logging for audit trail                                           |
++------------------------------------------------------------------------------+
+
+ANNOUNCEMENT LIFECYCLE:
+--------------------------------------------------------------------------------
+
++------------+     +------------+     +------------+     +------------+
+|   DRAFT    |---->| PUBLISHED  |---->|  PINNED    |---->|  ARCHIVED  |
++------------+     +------------+     +------------+     +------------+
+                         |
+                         v
+                   +------------+
+                   | UNPUBLISHED|
+                   +------------+
+
+Status Flow:
+  * DRAFT       -> Created but not visible to recipients
+  * PUBLISHED   -> Visible to targeted recipients, emails sent
+  * PINNED      -> Shows at top of announcement lists
+  * UNPUBLISHED -> Hidden from recipients (can republish)
+  * ARCHIVED    -> Soft deleted, hidden from all lists
+
+TYPICAL WORKFLOW:
+--------------------------------------------------------------------------------
+
+Step 1: Create Draft Announcement
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/announcement
+
+-> Create announcement with title, content, scope, priority
+-> Add targets if needed (specific programs, startups, mentors)
+-> Returns announcement in draft state (isPublished: false)
+
+Step 2: Add Targets (Optional)
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/announcement/:id/targets
+
+-> Add specific recipients: programs, startups, mentors, roles
+-> Useful for CUSTOM scope announcements
+
+Step 3: Add Exclusions (Optional)
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/announcement/:id/exclude
+
+-> Exclude specific recipients from receiving announcement
+-> Example: Announce to all startups EXCEPT certain ones
+
+Step 4: Add Attachments (Optional)
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/announcement/:id/attachment
+
+-> Attach files (already uploaded to S3)
+-> Supports documents, images, etc.
+
+Step 5: Publish Announcement
+-------------------------------------------------------------------------------
+PATCH /api/incubation-portal/announcement/:id/publish
+
+-> Makes announcement visible to recipients
+-> Sends email notifications to all targeted recipients
+-> Sets publishedAt timestamp
+
+Step 6: Pin Announcement (Optional)
+-------------------------------------------------------------------------------
+PATCH /api/incubation-portal/announcement/:id/pin
+
+-> Pins announcement to top of lists
+-> Shows above other announcements
+
+Step 7: Archive When Done
+-------------------------------------------------------------------------------
+DELETE /api/incubation-portal/announcement/:id
+
+-> Soft deletes announcement (sets isArchived: true)
+-> Can be restored later
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# ANNOUNCEMENT CRUD
+| Endpoint                              | Method | Purpose                                |
+|---------------------------------------|--------|----------------------------------------|
+| /announcement                         | POST   | Create new announcement                |
+| /announcements                        | GET    | List all announcements (paginated)     |
+| /announcement/:id                     | GET    | Get announcement details               |
+| /announcement/:id                     | PUT    | Update announcement                    |
+| /announcement/:id                     | DELETE | Archive announcement (soft delete)     |
+
+# ANNOUNCEMENT ACTIONS
+| Endpoint                              | Method | Purpose                                |
+|---------------------------------------|--------|----------------------------------------|
+| /announcement/:id/publish             | PATCH  | Publish and send notifications         |
+| /announcement/:id/unpublish           | PATCH  | Unpublish (hide from recipients)       |
+| /announcement/:id/pin                 | PATCH  | Pin to top of lists                    |
+| /announcement/:id/unpin               | PATCH  | Unpin from top                         |
+| /announcement/:id/restore             | PATCH  | Restore archived announcement          |
+
+# STATISTICS & READS
+| Endpoint                              | Method | Purpose                                |
+|---------------------------------------|--------|----------------------------------------|
+| /announcements/stats                  | GET    | Get announcement statistics            |
+| /announcement/:id/reads               | GET    | Get who has read the announcement      |
+
+# TARGETING
+| Endpoint                              | Method | Purpose                                |
+|---------------------------------------|--------|----------------------------------------|
+| /announcement/:id/targets             | POST   | Add targets (programs, startups, etc)  |
+| /announcement/:id/targets             | GET    | Get current targets                    |
+| /announcement/:id/targets             | DELETE | Remove targets                         |
+| /announcement/:id/exclude             | POST   | Add exclusions                         |
+| /announcement/:id/exclude/:id         | DELETE | Remove exclusion                       |
+
+# ATTACHMENTS
+| Endpoint                              | Method | Purpose                                |
+|---------------------------------------|--------|----------------------------------------|
+| /announcement/:id/attachment          | POST   | Add file attachment                    |
+| /announcement/:id/attachment/:attId   | DELETE | Remove attachment                      |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+AnnouncementOwnerType:
+- INCUBATION    (Created by incubation portal)
+- STARTUP       (Created by startup portal)
+
+AnnouncementVisibilityType:
+- PUBLIC        (Visible to everyone)
+- INTERNAL      (Visible to organization only)
+- TARGETED      (Visible only to specified targets)
+
+AnnouncementScope:
+- TENANT_WIDE       (All startups and mentors in tenant)
+- PROGRAM_SPECIFIC  (Only startups in specific program)
+- STARTUP_SPECIFIC  (Only startups)
+- MENTOR_SPECIFIC   (Only mentors)
+- CUSTOM            (Only specified targets)
+
+AnnouncementTargetType:
+- PROGRAM           (All startups in a program)
+- STARTUP           (Specific startup)
+- MENTOR            (Specific mentor association)
+- INCUBATION_USER   (Specific incubation team member)
+- USER              (Specific user)
+- ROLE              (All users with specific role)
+
+AnnouncementPriority:
+- LOW
+- MEDIUM
+- HIGH
+- URGENT
+
+AnnouncementActivityAction:
+- CREATED
+- UPDATED
+- PUBLISHED
+- UNPUBLISHED
+- PINNED
+- UNPINNED
+- ARCHIVED
+- RESTORED
+- DELETED
+- TARGET_ADDED
+- TARGET_REMOVED
+- ATTACHMENT_ADDED
+- ATTACHMENT_REMOVED
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "announcements": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 10
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. ANNOUNCEMENT CRUD OPERATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 CREATE ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/announcement
+Auth: Portal Token Required
+
+Purpose: Create a new announcement (draft by default).
+
+Request Body:
+{
+  "title": "Important Update for Q2 Cohort",
+  "content": "We are pleased to announce new mentorship opportunities...",
+  "priority": "HIGH",
+  "visibility": "INTERNAL",
+  "scope": "PROGRAM_SPECIFIC",
+  "programId": "cuid_program_123",
+  "expiresAt": "2026-03-01",
+  "targets": [
+    { "targetType": "STARTUP", "targetId": "cuid_startup_456" }
+  ],
+  "attachments": [
+    {
+      "fileName": "schedule.pdf",
+      "fileUrl": "https://bucket.s3.../schedule.pdf",
+      "fileKey": "path/schedule.pdf",
+      "fileType": "application/pdf",
+      "fileSize": 245000
+    }
+  ]
+}
+
+Field Details:
+- title (string, required): Announcement title
+- content (string, required): Announcement body
+- priority (enum, optional): LOW | MEDIUM | HIGH | URGENT (default: MEDIUM)
+- visibility (enum, optional): PUBLIC | INTERNAL | TARGETED (default: INTERNAL)
+- scope (enum, optional): TENANT_WIDE | PROGRAM_SPECIFIC | STARTUP_SPECIFIC | MENTOR_SPECIFIC | CUSTOM (default: TENANT_WIDE)
+- programId (string, required if scope=PROGRAM_SPECIFIC): Program ID
+- expiresAt (string, optional): ISO date when announcement expires
+- targets (array, optional): Initial targets to add
+- attachments (array, optional): Initial attachments to add
+
+Response (201):
+{
+  "success": true,
+  "message": "Announcement created successfully",
+  "data": {
+    "announcement": {
+      "id": "cuid_announcement_123",
+      "title": "Important Update for Q2 Cohort",
+      "content": "We are pleased to announce...",
+      "priority": "HIGH",
+      "ownerType": "INCUBATION",
+      "ownerId": "cuid_tenant_123",
+      "visibility": "INTERNAL",
+      "scope": "PROGRAM_SPECIFIC",
+      "programId": "cuid_program_123",
+      "isPublished": false,
+      "publishedAt": null,
+      "expiresAt": "2026-03-01T00:00:00.000Z",
+      "isPinned": false,
+      "pinnedAt": null,
+      "creatorId": "cuid_user_456",
+      "creatorType": "INCUBATION_USER",
+      "isArchived": false,
+      "createdAt": "2026-02-03T10:00:00.000Z",
+      "updatedAt": "2026-02-03T10:00:00.000Z",
+      "program": { "id": "cuid_program_123", "title": "Q2 Accelerator" },
+      "targets": [...],
+      "attachments": [...],
+      "creator": {
+        "id": "cuid_user_456",
+        "name": "John Admin",
+        "email": "john@incubator.com"
+      }
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET ALL ANNOUNCEMENTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/announcements
+Auth: Portal Token Required
+
+Purpose: List all announcements with filters and pagination.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- search (string): Search in title and content
+- scope (enum): Filter by scope
+- visibility (enum): Filter by visibility
+- priority (enum): Filter by priority
+- isPublished ("true" | "false"): Filter by publish status
+- isPinned ("true" | "false"): Filter by pinned status
+- isArchived ("true" | "false", default: "false"): Include archived
+- programId (string): Filter by program
+
+Example: ?isPublished=true&priority=HIGH&scope=PROGRAM_SPECIFIC
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcements fetched successfully",
+  "data": {
+    "announcements": [
+      {
+        "id": "cuid_announcement_123",
+        "title": "Important Update",
+        "content": "...",
+        "priority": "HIGH",
+        "scope": "PROGRAM_SPECIFIC",
+        "isPublished": true,
+        "isPinned": true,
+        "program": { "id": "...", "title": "Q2 Accelerator" },
+        "targets": [...],
+        "attachments": [...],
+        "_count": { "reads": 45 },
+        "creator": { ... }
+      }
+    ],
+    "total": 25,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 3
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET ANNOUNCEMENT BY ID
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id
+Auth: Portal Token Required
+
+Purpose: Get complete announcement details including reads and activity.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement fetched successfully",
+  "data": {
+    "announcement": {
+      "id": "cuid_announcement_123",
+      "title": "Important Update for Q2 Cohort",
+      "content": "Full announcement content...",
+      "priority": "HIGH",
+      "ownerType": "INCUBATION",
+      "ownerId": "cuid_tenant_123",
+      "visibility": "INTERNAL",
+      "scope": "PROGRAM_SPECIFIC",
+      "programId": "cuid_program_123",
+      "isPublished": true,
+      "publishedAt": "2026-02-03T12:00:00.000Z",
+      "expiresAt": "2026-03-01T00:00:00.000Z",
+      "isPinned": true,
+      "pinnedAt": "2026-02-03T12:30:00.000Z",
+      "program": { "id": "...", "title": "Q2 Accelerator" },
+      "targets": [
+        {
+          "id": "cuid_target_1",
+          "targetType": "STARTUP",
+          "targetId": "cuid_startup_456",
+          "isExcluded": false
+        }
+      ],
+      "attachments": [
+        {
+          "id": "cuid_attachment_1",
+          "fileName": "schedule.pdf",
+          "fileUrl": "https://...",
+          "fileType": "application/pdf",
+          "fileSize": 245000
+        }
+      ],
+      "reads": [
+        {
+          "id": "cuid_read_1",
+          "readerId": "cuid_member_123",
+          "readerType": "STARTUP_MEMBER",
+          "readAt": "2026-02-03T14:00:00.000Z"
+        }
+      ],
+      "activities": [
+        {
+          "id": "cuid_activity_1",
+          "actorId": "cuid_user_456",
+          "actorType": "INCUBATION_USER",
+          "action": "CREATED",
+          "createdAt": "2026-02-03T10:00:00.000Z"
+        },
+        {
+          "id": "cuid_activity_2",
+          "action": "PUBLISHED",
+          "createdAt": "2026-02-03T12:00:00.000Z"
+        }
+      ],
+      "creator": { ... }
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 UPDATE ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id
+Auth: Portal Token Required
+
+Purpose: Update announcement properties.
+
+Request Body:
+{
+  "title": "Updated Title",
+  "content": "Updated content...",
+  "priority": "URGENT",
+  "visibility": "INTERNAL",
+  "scope": "TENANT_WIDE",
+  "expiresAt": "2026-04-01"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement updated successfully",
+  "data": { "announcement": { ... } }
+}
+
+--------------------------------------------------------------------------------
+1.5 DELETE (ARCHIVE) ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id
+Auth: Portal Token Required
+
+Purpose: Archive announcement (soft delete).
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement archived successfully",
+  "data": {
+    "message": "Announcement archived successfully",
+    "deletedId": "cuid_announcement_123"
+  }
+}
+
+================================================================================
+2. ANNOUNCEMENT ACTIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 PUBLISH ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/publish
+Auth: Portal Token Required
+
+Purpose: Publish announcement and send email notifications.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement published successfully",
+  "data": {
+    "announcement": {
+      ...
+      "isPublished": true,
+      "publishedAt": "2026-02-03T12:00:00.000Z"
+    }
+  }
+}
+
+Note: Email notifications are sent to all targeted recipients when published.
+
+--------------------------------------------------------------------------------
+2.2 UNPUBLISH ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/unpublish
+Auth: Portal Token Required
+
+Purpose: Unpublish announcement (hide from recipients).
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement unpublished successfully",
+  "data": {
+    "announcement": {
+      ...
+      "isPublished": false,
+      "publishedAt": null
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+2.3 PIN ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/pin
+Auth: Portal Token Required
+
+Purpose: Pin announcement to top of lists.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement pinned successfully",
+  "data": {
+    "announcement": {
+      ...
+      "isPinned": true,
+      "pinnedAt": "2026-02-03T12:30:00.000Z"
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+2.4 UNPIN ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/unpin
+Auth: Portal Token Required
+
+Purpose: Unpin announcement from top.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement unpinned successfully",
+  "data": { "announcement": { ... } }
+}
+
+--------------------------------------------------------------------------------
+2.5 RESTORE ANNOUNCEMENT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/restore
+Auth: Portal Token Required
+
+Purpose: Restore an archived announcement.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement restored successfully",
+  "data": {
+    "announcement": {
+      ...
+      "isArchived": false,
+      "archivedAt": null
+    }
+  }
+}
+
+================================================================================
+3. STATISTICS & READS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 GET ANNOUNCEMENT STATISTICS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/announcements/stats
+Auth: Portal Token Required
+
+Purpose: Get announcement statistics for dashboard.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement stats fetched successfully",
+  "data": {
+    "total": 50,
+    "published": 35,
+    "draft": 15,
+    "pinned": 5,
+    "byScope": {
+      "TENANT_WIDE": 20,
+      "PROGRAM_SPECIFIC": 15,
+      "STARTUP_SPECIFIC": 10,
+      "MENTOR_SPECIFIC": 5
+    },
+    "byPriority": {
+      "LOW": 10,
+      "MEDIUM": 25,
+      "HIGH": 12,
+      "URGENT": 3
+    },
+    "byVisibility": {
+      "PUBLIC": 5,
+      "INTERNAL": 40,
+      "TARGETED": 5
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 GET ANNOUNCEMENT READS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/reads
+Auth: Portal Token Required
+
+Purpose: Get who has read an announcement.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement reads fetched successfully",
+  "data": {
+    "reads": [
+      {
+        "id": "cuid_read_1",
+        "announcementId": "cuid_announcement_123",
+        "readerId": "cuid_member_123",
+        "readerType": "STARTUP_MEMBER",
+        "readAt": "2026-02-03T14:00:00.000Z",
+        "reader": {
+          "id": "cuid_member_123",
+          "name": "Jane Founder",
+          "email": "jane@startup.com"
+        }
+      }
+    ],
+    "total": 45,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 3
+  }
+}
+
+================================================================================
+4. TARGETING
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 ADD TARGETS
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/targets
+Auth: Portal Token Required
+
+Purpose: Add targets to announcement.
+
+Request Body:
+{
+  "targets": [
+    { "targetType": "PROGRAM", "targetId": "cuid_program_123" },
+    { "targetType": "STARTUP", "targetId": "cuid_startup_456" },
+    { "targetType": "MENTOR", "targetId": "cuid_mentor_assoc_789" },
+    { "targetType": "ROLE", "targetId": "cuid_role_123" }
+  ]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Targets added successfully",
+  "data": {
+    "targets": [...]
+  }
+}
+
+--------------------------------------------------------------------------------
+4.2 GET TARGETS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/targets
+Auth: Portal Token Required
+
+Purpose: Get announcement targets with details.
+
+Response (200):
+{
+  "success": true,
+  "message": "Targets fetched successfully",
+  "data": {
+    "targets": [
+      {
+        "id": "cuid_target_1",
+        "announcementId": "cuid_announcement_123",
+        "targetType": "PROGRAM",
+        "targetId": "cuid_program_123",
+        "isExcluded": false,
+        "info": {
+          "id": "cuid_program_123",
+          "title": "Q2 Accelerator"
+        }
+      },
+      {
+        "id": "cuid_target_2",
+        "targetType": "STARTUP",
+        "targetId": "cuid_startup_456",
+        "isExcluded": false,
+        "info": {
+          "id": "cuid_startup_456",
+          "name": "TechStartup Inc",
+          "contactEmail": "contact@techstartup.com"
+        }
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+4.3 REMOVE TARGETS
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/targets
+Auth: Portal Token Required
+
+Purpose: Remove targets from announcement.
+
+Request Body:
+{
+  "targetIds": ["cuid_target_1", "cuid_target_2"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Targets removed successfully"
+}
+
+--------------------------------------------------------------------------------
+4.4 ADD EXCLUSIONS
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/exclude
+Auth: Portal Token Required
+
+Purpose: Exclude specific recipients from receiving announcement.
+
+Request Body:
+{
+  "exclusions": [
+    { "targetType": "STARTUP", "targetId": "cuid_startup_to_exclude" }
+  ]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Exclusions added successfully",
+  "data": {
+    "exclusions": [
+      {
+        "id": "cuid_exclusion_1",
+        "targetType": "STARTUP",
+        "targetId": "cuid_startup_to_exclude",
+        "isExcluded": true
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+4.5 REMOVE EXCLUSION
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/exclude/:exclusionId
+Auth: Portal Token Required
+
+Purpose: Remove an exclusion.
+
+Response (200):
+{
+  "success": true,
+  "message": "Exclusion removed successfully"
+}
+
+================================================================================
+5. ATTACHMENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 ADD ATTACHMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/attachment
+Auth: Portal Token Required
+
+Purpose: Add file attachment to announcement.
+
+Request Body:
+{
+  "fileName": "document.pdf",
+  "fileUrl": "https://bucket.s3.region.amazonaws.com/path/document.pdf",
+  "fileKey": "path/document.pdf",
+  "fileType": "application/pdf",
+  "fileSize": 500000
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Attachment added successfully",
+  "data": {
+    "attachment": {
+      "id": "cuid_attachment_1",
+      "announcementId": "cuid_announcement_123",
+      "fileName": "document.pdf",
+      "fileUrl": "https://...",
+      "fileKey": "path/document.pdf",
+      "fileType": "application/pdf",
+      "fileSize": 500000,
+      "uploadedById": "cuid_user_123",
+      "uploadedByType": "INCUBATION_USER",
+      "createdAt": "2026-02-03T10:00:00.000Z"
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 REMOVE ATTACHMENT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/announcement/:id/attachment/:attachmentId
+Auth: Portal Token Required
+
+Purpose: Remove attachment from announcement.
+
+Response (200):
+{
+  "success": true,
+  "message": "Attachment removed successfully"
+}
+
+================================================================================
+COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Create and Publish Tenant-Wide Announcement
+--------------------------------------------------------------------------------
+
+Step 1: Create announcement
+POST /api/incubation-portal/announcement
+Body: {
+  "title": "New Office Hours Schedule",
+  "content": "Starting next week, office hours will be...",
+  "priority": "MEDIUM",
+  "scope": "TENANT_WIDE"
+}
+
+Step 2: Add attachment
+POST /api/incubation-portal/announcement/:id/attachment
+Body: {
+  "fileName": "schedule.pdf",
+  "fileUrl": "https://...",
+  "fileKey": "...",
+  "fileType": "application/pdf",
+  "fileSize": 100000
+}
+
+Step 3: Publish
+PATCH /api/incubation-portal/announcement/:id/publish
+
+-> All startups and mentors receive email notification
+
+
+EXAMPLE 2: Program-Specific Announcement with Exclusions
+--------------------------------------------------------------------------------
+
+Step 1: Create announcement for Q2 Cohort
+POST /api/incubation-portal/announcement
+Body: {
+  "title": "Demo Day Preparation",
+  "content": "Reminder: Demo day is in 2 weeks...",
+  "priority": "HIGH",
+  "scope": "PROGRAM_SPECIFIC",
+  "programId": "cuid_program_q2"
+}
+
+Step 2: Exclude a startup that already graduated
+POST /api/incubation-portal/announcement/:id/exclude
+Body: {
+  "exclusions": [
+    { "targetType": "STARTUP", "targetId": "cuid_graduated_startup" }
+  ]
+}
+
+Step 3: Publish and pin
+PATCH /api/incubation-portal/announcement/:id/publish
+PATCH /api/incubation-portal/announcement/:id/pin
+
+
+EXAMPLE 3: Targeted Announcement to Specific Recipients
+--------------------------------------------------------------------------------
+
+Step 1: Create custom announcement
+POST /api/incubation-portal/announcement
+Body: {
+  "title": "Meeting Request",
+  "content": "Please schedule a meeting with the admin team...",
+  "priority": "HIGH",
+  "scope": "CUSTOM",
+  "targets": [
+    { "targetType": "STARTUP", "targetId": "cuid_startup_1" },
+    { "targetType": "STARTUP", "targetId": "cuid_startup_2" },
+    { "targetType": "MENTOR", "targetId": "cuid_mentor_assoc_1" }
+  ]
+}
+
+Step 2: Publish
+PATCH /api/incubation-portal/announcement/:id/publish
+
+-> Only specified startups and mentor receive notification
+
+
+EXAMPLE 4: Dashboard View
+--------------------------------------------------------------------------------
+
+Step 1: Get statistics
+GET /api/incubation-portal/announcements/stats
+
+Step 2: Get published announcements
+GET /api/incubation-portal/announcements?isPublished=true
+
+Step 3: Get urgent announcements
+GET /api/incubation-portal/announcements?priority=URGENT&isPublished=true
+
+Step 4: Check reads for important announcement
+GET /api/incubation-portal/announcement/:id/reads
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                    API TO USE
+--------------------------------------------------------------------------------
+"Create a new announcement"                 POST /announcement
+"See all announcements"                     GET /announcements
+"See announcement details"                  GET /announcement/:id
+"Update announcement content"               PUT /announcement/:id
+"Publish announcement"                      PATCH /announcement/:id/publish
+"Pin important announcement"                PATCH /announcement/:id/pin
+"Archive old announcement"                  DELETE /announcement/:id
+"Restore archived announcement"             PATCH /announcement/:id/restore
+"Get dashboard statistics"                  GET /announcements/stats
+"See who read announcement"                 GET /announcement/:id/reads
+"Add specific recipients"                   POST /announcement/:id/targets
+"Exclude certain recipients"                POST /announcement/:id/exclude
+"Attach a file"                             POST /announcement/:id/attachment
+
+================================================================================
+END OF INCUBATION ANNOUNCEMENT API DOCUMENTATION
+================================================================================

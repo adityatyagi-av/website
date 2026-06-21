@@ -1,0 +1,51 @@
+STARTUP CHAT SYSTEM
+====================
+
+Overview:
+  Startups communicate through their linked Page identity.
+  Each Startup has a pageId; the Page name and logo are used as display identity.
+
+Entity Type: STARTUP (resolved via Page)
+
+Identity Resolution:
+  - Startup -> startup.page.name / startup.page.logo
+  - If startup has no page, falls back to startup.name / startup.logo
+  - Messages show the Page name to external recipients
+  - Internal team members see "Page Name (sent by FirstName LastName)"
+
+Who Can Send:
+  - Only OWNER or ADMIN role in StartupMember table
+  - MEMBER and OTHER roles cannot send on behalf of startup
+
+Inbox Behavior:
+  - Startup conversations appear ONLY in startup/entity inbox
+  - Scoped by participant1Type/participant2Type = "STARTUP"
+  - Personal user inbox never shows startup conversations
+  - All active startup members can view conversations
+
+Multi-Member Visibility:
+  - All StartupMember records where isActive=true can see conversations
+  - Real-time updates delivered via socket room "user:{startupId}"
+  - All members join this room on socket connect
+
+Deduplication:
+  - When a Startup has a linked Page, search results show only the Page
+  - deduplicateLinkedEntities removes STARTUP results when Page already in results
+  - Prevents showing "Startup X" and "Page X" as separate chat targets
+
+Socket Rooms:
+  - On connect: joins "user:{startupId}" for each active startup membership
+  - Notifications delivered to all startup members via this room
+
+Permission Flow:
+  1. User sends message with startupId in request
+  2. validateSendPermission checks:
+     a. StartupMember record exists for startupId + userId
+     b. Membership isActive = true
+     c. Role is OWNER or ADMIN
+  3. If all pass, message sent as senderType=STARTUP, senderId=startupId
+
+Entity Resolution (resolveEntity):
+  - Fetches startup with page include
+  - Returns: { name: page.name, avatar: page.logo, entityType: "STARTUP" }
+  - Auto-heals if page relation is corrupted

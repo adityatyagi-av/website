@@ -1,0 +1,162 @@
+================================================================================
+RAZORPAY WEBHOOK API — INTERNAL (RAZORPAY -> SERVER)
+================================================================================
+
+These endpoints are called by Razorpay servers; they are NOT consumed by the
+frontend. This document is for ops/devops to register webhooks correctly and
+for engineers to understand the side effects each event triggers.
+
+Base URL prefix:  /api
+Auth: NO JWT. Each request is authenticated by the
+      `x-razorpay-signature` header verified with HMAC-SHA256(rawBody, secret).
+      The two endpoints use DIFFERENT secrets so account events and money
+      events can be wired to two separate Razorpay webhooks for clarity.
+
+Idempotency:
+  Every event is recorded in WebhookEventLog (unique on eventId). Duplicate
+  deliveries return { status: "duplicate" } without re-running side effects.
+
+Common response envelope on success:
+{ "success": true, "status": 200, "data": { "received": true }, "message": "..." }
+
+Common error responses:
+  401 — { success:false, status:401, data:null, message:"Invalid webhook signature" }
+        Returned when the HMAC check fails or the secret env var is unset.
+
+================================================================================
+1. ACCOUNT WEBHOOK (Razorpay Route — Linked Account state changes)
+================================================================================
+POST /api/webhooks/razorpay/account
+
+Configure in Razorpay Dashboard with secret stored in:
+  RAZORPAY_ACCOUNT_WEBHOOK_SECRET
+  (falls back to RAZORPAY_WEBHOOK_SECRET if the dedicated one is unset)
+
+Subscribe to Razorpay events:
+  account.under_review
+  account.needs_clarification
+  account.activated
+  account.rejected
+  account.suspended
+
+Side effects per event (on the matching IncubationPayoutAccount row, looked
+up by `razorpayLinkedAccountId`):
+
+  account.under_review        -> kycStatus = UNDER_REVIEW
+  account.needs_clarification -> kycStatus = NEEDS_CLARIFICATION,
+                                 kycRejectionReason = entity.notes.reason
+  account.activated           -> kycStatus = ACTIVATED, activatedAt = now(),
+                                 kycRejectionReason = null
+  account.rejected            -> kycStatus = REJECTED,
+                                 kycRejectionReason = entity.notes.reason
+  account.suspended           -> kycStatus = SUSPENDED
+
+For each handled event, the server pushes a notification to every active
+IncubationUser member of the tenant (entityType "IncubationPayoutAccount",
+category "OFFICE", priority HIGH for activation/rejection/suspension).
+
+================================================================================
+2. OFFICE WEBHOOK (payments, transfers, subscriptions, refunds)
+================================================================================
+POST /api/webhooks/razorpay/office
+
+Configure in Razorpay Dashboard with secret stored in:
+  RAZORPAY_OFFICE_WEBHOOK_SECRET
+  (falls back to RAZORPAY_WEBHOOK_SECRET if the dedicated one is unset)
+
+Subscribe to Razorpay events:
+  payment.captured
+  payment.failed
+  transfer.processed
+  transfer.failed
+  subscription.authenticated
+  subscription.activated
+  subscription.charged
+  subscription.completed
+  subscription.halted
+  subscription.cancelled
+  subscription.paused
+  subscription.resumed
+  refund.processed
+  refund.failed
+
+Side effects per event:
+
+  payment.captured
+    -> Locate OfficePayment by razorpayOrderId or razorpayPaymentId
+    -> Set status = COMPLETED, paidAt = now(), invoiceNumber if missing,
+       paymentMethod = entity.method
+    -> If paymentType in (BOOKING, RENT): OfficeBooking.status = CONFIRMED,
+       isPaid = true, lastBilledAt = now()
+    -> If paymentType = SECURITY_DEPOSIT:
+       OfficeBooking.securityDepositStatus = COLLECTED
+    -> Push "Payment received" notification to startup members.
+
+  payment.failed
+    -> OfficePayment.status = FAILED, failureReason set
+    -> Push "Payment failed" notification.
+
+  transfer.processed
+    -> Upsert OfficePayout keyed on razorpayTransferId
+       (status = PROCESSED, payoutDate = now())
+    -> Stamp paying OfficePayment.razorpayTransferId.
+
+  transfer.failed
+    -> Upsert OfficePayout (status = FAILED, failureReason set).
+
+  subscription.authenticated / subscription.activated
+    -> Find OfficeSubscription by razorpaySubscriptionId
+    -> status = AUTHENTICATED (auth event) or ACTIVE (activation),
+       sync currentStart, currentEnd, nextChargeAt, endAt from Razorpay
+    -> OfficeBooking.status = CONFIRMED, isPaid = true
+    -> Push "Subscription activated" notification.
+
+  subscription.charged
+    -> Create new OfficePayment row (paymentType = RECURRING_RENT, status =
+       COMPLETED), increment paidCount, decrement remainingCount,
+       update currentStart/currentEnd/nextChargeAt
+    -> If remainingCount reaches 0, status = COMPLETED.
+    -> OfficeBooking.lastBilledAt and nextDueDate updated.
+
+  subscription.completed
+    -> OfficeSubscription.status = COMPLETED, remainingCount = 0
+    -> OfficeBooking.status = COMPLETED
+    -> Mark linked OfficeAllocation (ACTIVE) as ENDED with endDate now().
+
+  subscription.halted
+    -> OfficeSubscription.status = HALTED
+    -> Push "Subscription payment failed" notification.
+    -> The dunning cron handles day 1/4/7 reminders, day-7 suspend, day-21 cancel.
+
+  subscription.cancelled
+    -> OfficeSubscription.status = CANCELLED, cancelledAt = now()
+    -> OfficeBooking.status = CANCELLED.
+
+  subscription.paused
+    -> OfficeSubscription.status = PAUSED, pausedAt = now().
+
+  subscription.resumed
+    -> OfficeSubscription.status = ACTIVE, pausedAt = null.
+
+  refund.processed
+    -> OfficePayment.refundedAt = now(), refundAmount set.
+    -> If refund covers full amount, OfficePayment.status = REFUNDED.
+    -> If a transfer was associated, OfficePayout.status = REVERSED.
+
+================================================================================
+WEBHOOK EVENT LOG MODEL
+================================================================================
+WebhookEventLog row fields (used for idempotency + retry):
+  id          cuid
+  provider    "razorpay"
+  eventId     unique
+  eventType   e.g. "subscription.charged"
+  payload     full Razorpay JSON payload
+  status      PROCESSING | PROCESSED | FAILED | PENDING
+  error       string (when FAILED)
+  attempts    int
+  processedAt ISO date when status -> PROCESSED
+  createdAt / updatedAt
+
+Hourly cron (`*/15 * * *`) retries any FAILED/PENDING entries with
+attempts < 5 and updatedAt older than 30 minutes.

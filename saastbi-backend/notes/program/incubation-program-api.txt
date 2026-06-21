@@ -1,0 +1,619 @@
+================================================================================
+PROGRAM MANAGEMENT API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-04-15
+Base URL: /api/incubation-portal
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+Required Header: tenantkey (tenant identifier)
+
+================================================================================
+INCUBATION PROGRAM MANAGEMENT FLOW
+================================================================================
+
+The Program Management module allows incubation centers to create and manage
+incubation programs, handle applications, perform evaluations, manage startups,
+and configure scheme questions for application forms.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
++----------------------------------------------------------------------+
+|                 INCUBATION PROGRAM MANAGEMENT                         |
+|               Base: /api/incubation-portal                            |
++----------------------------------------------------------------------+
+|  1. Create Program with batches, scheme questions, eval questions      |
+|  2. Open batch to accept applications                                  |
+|  3. Review incoming applications (registrations)                       |
+|  4. Request changes/documents from applicants                          |
+|  5. Move to evaluation -> Panel members evaluate                       |
+|  6. Verify and onboard accepted startups                              |
+|  7. Manage onboarded startups, funding, disbursements                 |
++----------------------------------------------------------------------+
+
+================================================================================
+PROGRAM CRUD
+================================================================================
+
+1. CREATE PROGRAM
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/program
+
+Description: Create a new incubation program with optional inline batch,
+             scheme questions, and evaluation questions.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "title": "Startup Accelerator 2026",
+  "description": "A 6-month acceleration program...",
+  "objective": "Help early-stage startups scale",
+  "benefits": "Mentorship, funding, office space",
+  "guidelines": "Startups must be < 3 years old",
+  "eligibilityCriteria": "Revenue generating startups...",
+  "nonEligibilityCriteria": "Government employees...",
+  "expectedOutcome": "10x growth in revenue",
+  "externalLink": "https://example.com/program",
+  "coverImage": "https://s3.../cover.jpg",
+  "programLogo": "https://s3.../logo.jpg",
+  "schemeType": "ACCELERATOR",
+  "schemeTypeId": "cuid_optional",
+  "governingBodyId": "cuid_optional",
+  "schemeQuestionIds": ["q1_cuid", "q2_cuid"],
+  "evaluationQuestions": [
+    {
+      "questionText": "Innovation Score",
+      "weightage": 0.3,
+      "scoringReference": "1=Low, 5=High",
+      "order": 1,
+      "options": [
+        { "optionText": "Poor", "score": 1, "order": 1 },
+        { "optionText": "Average", "score": 3, "order": 2 },
+        { "optionText": "Excellent", "score": 5, "order": 3 }
+      ]
+    }
+  ],
+  "batch": {
+    "batchName": "Batch 1",
+    "batchCode": "B1-2026",
+    "description": "First cohort",
+    "applicationStartDate": "2026-03-01",
+    "applicationEndDate": "2026-04-30",
+    "maxSlots": 30,
+    "totalFundingAmount": 5000000,
+    "fundingType": "GRANT",
+    "fundingCurrency": "INR",
+    "isFundingAvailable": true
+  }
+}
+
+Notes:
+  - Inline batch is created with status DRAFT (never OPEN directly)
+  - schemeQuestionIds links existing scheme questions to the program
+  - evaluationQuestions creates new evaluation criteria
+
+================================================================================
+
+2. GET ALL PROGRAMS
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/programs?page=1&limit=10&search=&sortBy=createdAt&order=desc
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+================================================================================
+
+3. GET PROGRAM BY ID
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/program/:programId
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+================================================================================
+
+4. UPDATE PROGRAM
+--------------------------------------------------------------------------------
+
+PATCH /api/incubation-portal/program/:programId
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body: (any fields from create, all optional)
+
+================================================================================
+REGISTRATIONS (APPLICATIONS)
+================================================================================
+
+5. GET PROGRAM REGISTRATIONS
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/program/:programId/registrations?page=1&limit=10&search=&sortBy=createdAt&order=desc&status=
+
+Description: Get all applications/registrations for a program
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Query:
+  - status: Filter by StartupApplicationStatus (NEW, REVIEWED, etc.)
+  - page, limit, search, sortBy, order
+
+Response includes:
+  - Application details with startup info, batch info
+  - Scheme answers
+  - Current status and history
+
+================================================================================
+
+6. GET REGISTRATION BY ID
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/program/:programId/registrations/:registrationId
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+================================================================================
+
+7. CHANGE APPLICATION STATUS
+--------------------------------------------------------------------------------
+
+PATCH /api/incubation-portal/application/:applicationId/status
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "newStatus": "REVIEWED",
+  "comment": "Application looks good, moving to review"
+}
+
+Allowed transitions:
+  NEW -> REVIEWED, CHANGES_REQUESTED, REJECTED
+  CHANGES_RECEIVED -> REVIEWED, REJECTED
+  REVIEWED -> UNDER_EVALUATION, REJECTED
+  EVALUATED -> VERIFIED, REJECTED
+  VERIFIED -> ONBOARDED, REJECTED
+  DOCS_RECEIVED -> REVIEWED, VERIFIED
+
+================================================================================
+
+8. REQUEST CHANGES
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/application/request-changes
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "applicationId": "cuid",
+  "title": "Revenue Model Clarification",
+  "description": "Please provide detailed revenue projections...",
+  "type": "GENERAL"
+}
+
+Types: GENERAL, FILE, QUESTION
+
+================================================================================
+
+9. REQUEST DOCUMENTS
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/application/request-documents
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "applicationId": "cuid",
+  "title": "Certificate of Incorporation",
+  "description": "Please upload your company registration certificate"
+}
+
+================================================================================
+
+10. BULK REQUEST DOCUMENTS
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/bulk-request-documents
+
+Description: Request documents from multiple applications at once.
+             Useful for batch-level document collection.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "applicationIds": ["cuid1", "cuid2", "cuid3"],
+  "title": "DPIIT Certificate",
+  "description": "Please upload your DPIIT recognition certificate"
+}
+
+Response:
+{
+  "success": true,
+  "data": {
+    "summary": {
+      "total": 3,
+      "success": 3,
+      "errors": 0
+    },
+    "success": [
+      { "applicationId": "cuid1", "documentRequestId": "dr_cuid1" },
+      { "applicationId": "cuid2", "documentRequestId": "dr_cuid2" },
+      { "applicationId": "cuid3", "documentRequestId": "dr_cuid3" }
+    ],
+    "errors": []
+  }
+}
+
+Notes:
+  - Application status is changed to DOCS_REQUESTED if not already
+  - ApplicationHistory record created for each status change
+  - If application is already in DOCS_REQUESTED/DOCS_RECEIVED, status unchanged
+
+================================================================================
+STARTUP MANAGEMENT
+================================================================================
+
+11. ADD EXISTING STARTUP TO PROGRAM
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/program/:programId/add-startup
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "startupId": "cuid",
+  "batchId": "cuid_optional"
+}
+
+================================================================================
+
+12. CREATE STARTUP AND ADD TO PROGRAM
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/program/:programId/create-startup
+
+Description: Create a new startup with its founder user and add directly
+             to the program with ONBOARDED status.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "batchId": "cuid_optional",
+  "startup": {
+    "name": "TechCorp Solutions",
+    "contactEmail": "info@techcorp.com",
+    "contactPhone": "+91-9876543210",
+    "sector": "SaaS",
+    "stage": "Early Stage",
+    "description": "B2B SaaS platform",
+    "website": "https://techcorp.com"
+  },
+  "user": {
+    "email": "founder@techcorp.com",
+    "firstName": "Raj",
+    "lastName": "Kumar",
+    "phone": "+91-9876543210"
+  },
+  "founders": [
+    {
+      "email": "cofounder@techcorp.com",
+      "name": "Priya Sharma",
+      "phone": "+91-9876543211",
+      "role": "FOUNDER",
+      "title": "CTO"
+    }
+  ]
+}
+
+Response includes tempPassword if user was newly created.
+
+================================================================================
+
+13. BULK REGISTER STARTUPS FROM EXCEL
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/program/:programId/batch/:batchId/bulk-register
+ OR
+POST /api/incubation-portal/program/:programId/bulk-register
+
+Description: Register multiple startups at once from Excel data (parsed as JSON
+             by frontend). System performs fuzzy matching to avoid duplicates.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "batchId": "cuid_optional_if_not_in_url",
+  "startups": [
+    {
+      "startupName": "TechCorp Solutions",
+      "founderEmail": "raj@techcorp.com",
+      "founderFirstName": "Raj",
+      "founderLastName": "Kumar",
+      "founderPhone": "+91-9876543210",
+      "contactEmail": "info@techcorp.com",
+      "contactPhone": "+91-9876543210",
+      "sector": "SaaS",
+      "stage": "Early Stage",
+      "description": "B2B SaaS platform",
+      "website": "https://techcorp.com"
+    },
+    {
+      "startupName": "GreenEnergy Pvt Ltd",
+      "founderEmail": "anita@greenenergy.com",
+      "founderFirstName": "Anita",
+      "founderLastName": "Patel",
+      "sector": "CleanTech",
+      "stage": "Growth"
+    }
+  ]
+}
+
+Required fields per entry:
+  - startupName (required)
+  - founderEmail (required)
+  - All other fields optional
+
+Response:
+{
+  "success": true,
+  "data": {
+    "summary": {
+      "total": 2,
+      "created": 1,
+      "linked": 1,
+      "errors": 0
+    },
+    "created": [
+      {
+        "row": 2,
+        "startupId": "cuid",
+        "startupName": "GreenEnergy Pvt Ltd",
+        "applicationId": "cuid",
+        "userCreated": true,
+        "userId": "cuid"
+      }
+    ],
+    "linked": [
+      {
+        "row": 1,
+        "startupId": "cuid",
+        "startupName": "TechCorp Solutions",
+        "applicationId": "cuid",
+        "userCreated": false,
+        "wasAutoLinked": true,
+        "matchScore": 0.85
+      }
+    ],
+    "reviewNeeded": [],
+    "errors": []
+  }
+}
+
+MATCHING LOGIC:
+  1. Look up user by founderEmail
+  2. If user not found, create new user with generated password
+  3. Check user's existing startups by exact name match
+  4. If no exact match, check fuzzy match (>= 75% similarity)
+  5. If fuzzy match found, auto-link (wasAutoLinked: true)
+  6. Check global DB by contactEmail or exact name match
+  7. If no match at all, create new startup
+  8. Create application with ONBOARDED status
+
+FRONTEND EXCEL PARSING:
+  Expected columns: Startup Name, Founder Email, Founder First Name,
+  Founder Last Name, Founder Phone, Contact Email, Contact Phone,
+  Sector, Stage, Description, Website
+
+================================================================================
+
+14. GET STARTUPS BY PROGRAM
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/programs/:programId/startups?batchId=&page=1&limit=10&search=&sortBy=createdAt&order=desc&stage=&status=&programStatus=
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Query:
+  - batchId (optional): Filter by batch
+  - programStatus (optional): ACTIVE, COMPLETED, OFFBOARDED, REMOVED
+  - stage, status: Filter by startup stage/status
+
+================================================================================
+
+15. SEARCH STARTUPS
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/search-startups?search=&page=1&limit=10
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+================================================================================
+SCHEME QUESTIONS (APPLICATION FORM BUILDER)
+================================================================================
+
+16. GET SCHEME QUESTIONS
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/scheme-questions?search=&questionType=
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+================================================================================
+
+17. CREATE SCHEME QUESTION
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/scheme-question
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "questionText": "What is your annual revenue?",
+  "questionType": "NUMBER",
+  "isRequired": true,
+  "options": []
+}
+
+Question Types: TEXT, TEXTAREA, NUMBER, DATE, SELECT, MULTI_SELECT,
+                RADIO, FILE, CHECKBOX
+
+================================================================================
+
+18. UPDATE/DELETE SCHEME QUESTION
+--------------------------------------------------------------------------------
+
+PATCH /api/incubation-portal/scheme-question/:id
+DELETE /api/incubation-portal/scheme-question/:id
+
+================================================================================
+EVALUATION QUESTIONS
+================================================================================
+
+19. GET EVALUATION QUESTIONS FOR PROGRAM
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/program/:programId/evaluation-questions
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+================================================================================
+
+20. ADD EVALUATION QUESTION
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/program/:programId/evaluation-question
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "questionText": "Market Potential",
+  "weightage": 0.25,
+  "scoringReference": "Score 1-5 based on market size",
+  "order": 2,
+  "options": [
+    { "optionText": "Very Small", "score": 1, "order": 1 },
+    { "optionText": "Small", "score": 2, "order": 2 },
+    { "optionText": "Medium", "score": 3, "order": 3 },
+    { "optionText": "Large", "score": 4, "order": 4 },
+    { "optionText": "Very Large", "score": 5, "order": 5 }
+  ]
+}
+
+================================================================================
+
+21. UPDATE/DELETE/REORDER/TOGGLE EVALUATION QUESTIONS
+--------------------------------------------------------------------------------
+
+PATCH /api/incubation-portal/evaluation-question/:id
+DELETE /api/incubation-portal/evaluation-question/:id
+PATCH /api/incubation-portal/program/:programId/evaluation-questions/reorder
+PATCH /api/incubation-portal/evaluation-question/:id/toggle-active
+
+================================================================================
+APPLICATION EVALUATION (ADMIN VIEW)
+================================================================================
+
+22. GET APPLICATION EVALUATIONS
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/application/:applicationId/evaluations
+
+================================================================================
+
+23. GET EVALUATION BY ID
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/application/:applicationId/evaluation/:evaluationId
+
+================================================================================
+
+24. GET EVALUATION SUMMARY
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/application/:applicationId/evaluation-summary
+
+================================================================================
+SCHEME TYPES & GOVERNING BODIES
+================================================================================
+
+25-30. CRUD for Scheme Types and Governing Bodies
+--------------------------------------------------------------------------------
+
+GET    /api/incubation-portal/scheme-types
+POST   /api/incubation-portal/scheme-type
+PATCH  /api/incubation-portal/scheme-type/:id
+DELETE /api/incubation-portal/scheme-type/:id
+
+GET    /api/incubation-portal/governing-bodies
+POST   /api/incubation-portal/governing-body
+PATCH  /api/incubation-portal/governing-body/:id
+DELETE /api/incubation-portal/governing-body/:id
+
+================================================================================
+FUNDING MANAGEMENT
+================================================================================
+
+31. GET FUNDING REQUESTS
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/application/:applicationId/funding-requests
+
+================================================================================
+
+32. UPDATE FUNDING REQUEST STATUS
+--------------------------------------------------------------------------------
+
+PATCH /api/incubation-portal/funding-request/:requestId/status
+
+Body:
+{
+  "status": "APPROVED",
+  "reviewComment": "Approved for product development"
+}
+
+================================================================================
+
+33. DISBURSE FUNDS
+--------------------------------------------------------------------------------
+
+POST /api/incubation-portal/application/:applicationId/disburse
+
+================================================================================
+
+34. GET DISBURSEMENT HISTORY
+--------------------------------------------------------------------------------
+
+GET /api/incubation-portal/application/:applicationId/disbursements
+
+================================================================================

@@ -1,0 +1,446 @@
+================================================================================
+ANNOUNCEMENT API - MENTOR PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-03
+Base URL: /api
+
+Authentication: User Bearer Token with MENTOR role (authenticate + authorizeMentor)
+Note: User must have a MentorProfile and be associated with incubators
+
+================================================================================
+ANNOUNCEMENT MODULE FLOW
+================================================================================
+
+The Mentor Announcement module allows mentors to receive and manage
+announcements from incubation centers they are associated with.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
++------------------------------------------------------------------------------+
+|                      MENTOR ANNOUNCEMENT MANAGEMENT                           |
+|                      Base: /api                                               |
++------------------------------------------------------------------------------+
+|                                                                               |
+|  RECEIVED ANNOUNCEMENTS (From Incubation):                                    |
+|  * View announcements from associated incubators                              |
+|  * Filter by incubator                                                        |
+|  * Filter by read status                                                      |
+|  * Mark as read                                                               |
+|  * Track unread count                                                         |
+|                                                                               |
++------------------------------------------------------------------------------+
+
+ACCESS CONTROL:
+--------------------------------------------------------------------------------
+
+Who can access mentor announcements?
+  * Users with MENTOR role
+  * Must have an active MentorProfile
+  * Must have active associations with incubators
+
+Received Announcements Visibility:
+  * Announcements from tenants the mentor is associated with
+  * Announcements where mentor is explicitly targeted
+  * Scope: TENANT_WIDE or MENTOR_SPECIFIC from associated incubators
+  * Excluded from announcements where mentor is explicitly excluded
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# RECEIVED ANNOUNCEMENTS (From Incubation)
+| Endpoint                                      | Method | Purpose                            |
+|-----------------------------------------------|--------|------------------------------------|
+| /mentor/announcements                         | GET    | List all received announcements    |
+| /mentor/announcements/unread-count            | GET    | Get unread count                   |
+| /mentor/announcements/:id                     | GET    | Get announcement details           |
+| /mentor/announcements/:id/read                | PATCH  | Mark as read                       |
+| /mentor/incubator/:incubatorId/announcements  | GET    | Get announcements from incubator   |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+AnnouncementPriority:
+- LOW
+- MEDIUM
+- HIGH
+- URGENT
+
+AnnouncementScope (visibility to mentor):
+- TENANT_WIDE       -> Visible if mentor is associated with tenant
+- MENTOR_SPECIFIC   -> Visible if mentor is associated with tenant
+- CUSTOM            -> Visible if mentor is explicitly targeted
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "announcements": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 10
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. RECEIVED ANNOUNCEMENTS API
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 GET ALL RECEIVED ANNOUNCEMENTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/mentor/announcements
+Auth: User Token Required (MENTOR role)
+
+Purpose: List announcements from all associated incubators.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- sortBy (string, default: "publishedAt")
+- order ("asc" | "desc", default: "desc")
+- search (string): Search in title and content
+- incubatorId (string): Filter by specific incubator
+- isRead ("true" | "false"): Filter by read status
+- priority (enum): Filter by priority
+
+Example: ?incubatorId=cuid_tenant_123&isRead=false&priority=HIGH
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcements fetched successfully",
+  "data": {
+    "announcements": [
+      {
+        "id": "cuid_announcement_123",
+        "title": "New Mentorship Guidelines",
+        "content": "We have updated our mentorship guidelines...",
+        "priority": "HIGH",
+        "scope": "MENTOR_SPECIFIC",
+        "isPublished": true,
+        "publishedAt": "2026-02-01T12:00:00.000Z",
+        "isPinned": true,
+        "pinnedAt": "2026-02-01T12:30:00.000Z",
+        "program": null,
+        "attachments": [
+          {
+            "id": "cuid_attachment_1",
+            "fileName": "guidelines.pdf",
+            "fileUrl": "https://...",
+            "fileType": "application/pdf",
+            "fileSize": 150000
+          }
+        ],
+        "tenant": {
+          "id": "cuid_tenant_123",
+          "organizationName": "Tech Incubator",
+          "tenantLogo": "https://..."
+        },
+        "creator": {
+          "id": "cuid_user_456",
+          "name": "Admin User",
+          "email": "admin@incubator.com"
+        },
+        "isRead": false
+      }
+    ],
+    "total": 15,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 2
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET UNREAD COUNT
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/mentor/announcements/unread-count
+Auth: User Token Required (MENTOR role)
+
+Purpose: Get count of unread announcements for notification badge.
+
+Response (200):
+{
+  "success": true,
+  "message": "Unread count fetched successfully",
+  "data": {
+    "unreadCount": 3,
+    "totalCount": 15
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET ANNOUNCEMENT BY ID
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/mentor/announcements/:id
+Auth: User Token Required (MENTOR role)
+
+Purpose: Get details of a specific received announcement.
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcement fetched successfully",
+  "data": {
+    "announcement": {
+      "id": "cuid_announcement_123",
+      "title": "New Mentorship Guidelines",
+      "content": "Full announcement content with details...",
+      "priority": "HIGH",
+      "scope": "MENTOR_SPECIFIC",
+      "ownerType": "INCUBATION",
+      "ownerId": "cuid_tenant_123",
+      "isPublished": true,
+      "publishedAt": "2026-02-01T12:00:00.000Z",
+      "isPinned": true,
+      "pinnedAt": "2026-02-01T12:30:00.000Z",
+      "expiresAt": null,
+      "program": null,
+      "attachments": [
+        {
+          "id": "cuid_attachment_1",
+          "fileName": "guidelines.pdf",
+          "fileUrl": "https://bucket.s3.../guidelines.pdf",
+          "fileType": "application/pdf",
+          "fileSize": 150000,
+          "createdAt": "2026-02-01T11:00:00.000Z"
+        }
+      ],
+      "tenant": {
+        "id": "cuid_tenant_123",
+        "organizationName": "Tech Incubator",
+        "tenantLogo": "https://..."
+      },
+      "creator": {
+        "id": "cuid_user_456",
+        "name": "Admin User",
+        "email": "admin@incubator.com",
+        "imageUrl": "https://..."
+      },
+      "isRead": false
+    }
+  }
+}
+
+Error Response (404):
+{
+  "success": false,
+  "message": "Announcement not found or access denied"
+}
+
+--------------------------------------------------------------------------------
+1.4 MARK AS READ
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/mentor/announcements/:id/read
+Auth: User Token Required (MENTOR role)
+
+Purpose: Mark an announcement as read.
+
+Response (200):
+{
+  "success": true,
+  "message": "Marked as read successfully",
+  "data": {
+    "message": "Marked as read"
+  }
+}
+
+Note: Calling this endpoint multiple times for the same announcement is safe
+(idempotent) - it will not create duplicate read records.
+
+--------------------------------------------------------------------------------
+1.5 GET ANNOUNCEMENTS BY INCUBATOR
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/mentor/incubator/:incubatorId/announcements
+Auth: User Token Required (MENTOR role)
+
+Purpose: Get announcements from a specific incubator.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- sortBy (string, default: "publishedAt")
+- order ("asc" | "desc", default: "desc")
+
+Response (200):
+{
+  "success": true,
+  "message": "Announcements fetched successfully",
+  "data": {
+    "announcements": [
+      {
+        "id": "cuid_announcement_123",
+        "title": "New Mentorship Guidelines",
+        "content": "...",
+        "priority": "HIGH",
+        "scope": "MENTOR_SPECIFIC",
+        "isPublished": true,
+        "publishedAt": "2026-02-01T12:00:00.000Z",
+        "isPinned": true,
+        "program": null,
+        "attachments": [...],
+        "creator": { ... },
+        "isRead": false
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+
+Error Response (403):
+{
+  "success": false,
+  "message": "You are not associated with this incubator"
+}
+
+================================================================================
+COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Check Announcements Dashboard
+--------------------------------------------------------------------------------
+
+Step 1: Check unread count (for notification badge)
+GET /api/mentor/announcements/unread-count
+-> Response: { unreadCount: 3, totalCount: 15 }
+
+Step 2: Get all unread announcements
+GET /api/mentor/announcements?isRead=false
+-> Shows 3 unread announcements
+
+Step 3: View specific announcement
+GET /api/mentor/announcements/cuid_announcement_123
+-> Full announcement details
+
+Step 4: Mark as read
+PATCH /api/mentor/announcements/cuid_announcement_123/read
+-> Announcement marked as read, unread count decreases
+
+
+EXAMPLE 2: Filter Announcements by Incubator
+--------------------------------------------------------------------------------
+
+Step 1: Get mentor's incubator associations
+GET /api/mentor/incubators
+-> Returns list of associated incubators
+
+Step 2: Get announcements from specific incubator
+GET /api/mentor/incubator/cuid_tenant_123/announcements
+-> Returns only announcements from that incubator
+
+Step 3: Or filter using query parameter
+GET /api/mentor/announcements?incubatorId=cuid_tenant_123
+-> Same result
+
+
+EXAMPLE 3: Priority-Based Filtering
+--------------------------------------------------------------------------------
+
+Get high priority unread announcements:
+GET /api/mentor/announcements?priority=HIGH&isRead=false
+
+Get all urgent announcements:
+GET /api/mentor/announcements?priority=URGENT
+
+
+EXAMPLE 4: Search Announcements
+--------------------------------------------------------------------------------
+
+Search for specific topic:
+GET /api/mentor/announcements?search=mentorship%20guidelines
+
+Search within specific incubator:
+GET /api/mentor/announcements?incubatorId=cuid_tenant_123&search=workshop
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                    API TO USE
+--------------------------------------------------------------------------------
+"See all announcements"                     GET /mentor/announcements
+"Check unread count"                        GET /mentor/announcements/unread-count
+"View specific announcement"                GET /mentor/announcements/:id
+"Mark announcement as read"                 PATCH /mentor/announcements/:id/read
+"See announcements from one incubator"      GET /mentor/incubator/:incubatorId/announcements
+"Filter by read status"                     GET /mentor/announcements?isRead=false
+"Filter by priority"                        GET /mentor/announcements?priority=HIGH
+"Search announcements"                      GET /mentor/announcements?search=keyword
+
+================================================================================
+ANNOUNCEMENT VISIBILITY RULES
+================================================================================
+
+A mentor can see an announcement if ALL of these conditions are met:
+  1. Announcement is published (isPublished: true)
+  2. Announcement is not archived (isArchived: false)
+  3. ONE of the following:
+     a. Scope is TENANT_WIDE and mentor is associated with the tenant
+     b. Scope is MENTOR_SPECIFIC and mentor is associated with the tenant
+     c. Mentor is explicitly targeted in the announcement
+
+A mentor CANNOT see an announcement if:
+  1. Mentor is explicitly excluded from the announcement
+  2. Announcement is not published
+  3. Announcement is archived
+  4. Mentor is not associated with the announcement's tenant
+
+================================================================================
+INTEGRATION WITH MENTOR DASHBOARD
+================================================================================
+
+Recommended dashboard integration:
+
+1. Notification Badge:
+   - Call GET /mentor/announcements/unread-count
+   - Display unreadCount on notification bell icon
+
+2. Announcements Widget:
+   - Call GET /mentor/announcements?limit=5&isRead=false
+   - Show latest unread announcements
+
+3. Full Announcements Page:
+   - Call GET /mentor/announcements with pagination
+   - Add filters for incubator, priority, read status
+   - Implement search functionality
+
+4. Announcement Detail Modal:
+   - Call GET /mentor/announcements/:id when user clicks
+   - Automatically call PATCH /mentor/announcements/:id/read
+
+================================================================================
+END OF MENTOR ANNOUNCEMENT API DOCUMENTATION
+================================================================================

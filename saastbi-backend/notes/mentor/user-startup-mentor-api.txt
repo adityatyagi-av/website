@@ -1,0 +1,1334 @@
+================================================================================
+MENTOR API - USER & STARTUP PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-10
+Base URL: /api/ecosystem/mentors (User APIs)
+          /api/startup-portal/mentor (Startup APIs)
+
+Authentication: User Bearer Token (authenticate middleware)
+Note: Some APIs require startup association for incubator benefits
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# DISCOVER MENTORS (Browse available mentors)
+| Endpoint                              | Method | Purpose                                     |
+|---------------------------------------|--------|---------------------------------------------|
+| /mentors/discover                     | GET    | Browse verified mentors with filters        |
+| /mentors/discover/:mentorId           | GET    | Get mentor profile details                  |
+| /mentors/discover/:mentorId/session-types | GET | Get mentor's session types                 |
+| /mentors/discover/:mentorId/packages  | GET    | Get mentor's mentorship packages            |
+| /mentors/discover/:mentorId/availability | GET | Get available time slots for a date        |
+| /mentors/discover/:mentorId/reviews   | GET    | Get mentor reviews with pagination          |
+| /mentors/featured                     | GET    | Get featured mentors                        |
+| /mentors/recommended                  | GET    | Get personalized recommendations            |
+
+# INCUBATOR MENTORS (For startups in incubation programs)
+| Endpoint                              | Method | Purpose                                     |
+|---------------------------------------|--------|---------------------------------------------|
+| /mentor/incubator-mentors             | GET    | List mentors from startup's incubator       |
+| /mentor/incubator-mentors/:mentorId   | GET    | Get incubator mentor details with subsidies |
+
+# BOOK SESSIONS
+| Endpoint                              | Method | Purpose                                     |
+|---------------------------------------|--------|---------------------------------------------|
+| /mentors/sessions/book/:mentorId      | POST   | Book a session with mentor                  |
+| /mentors/sessions/:sessionId/confirm-payment | POST | Confirm Razorpay payment               |
+| /mentors/sessions                     | GET    | List my sessions                            |
+| /mentors/sessions/:sessionId          | GET    | Get session details                         |
+| /mentors/sessions/:sessionId/cancel   | POST   | Cancel a session                            |
+| /mentors/sessions/:sessionId/reschedule | POST | Reschedule a session                        |
+| /mentors/sessions/:sessionId/review   | POST   | Submit review after session                 |
+| /mentors/sessions/:sessionId/join     | GET    | Get video call join info                    |
+
+# MENTORSHIP PACKAGES
+| Endpoint                              | Method | Purpose                                     |
+|---------------------------------------|--------|---------------------------------------------|
+| /mentors/packages/:packageId/subscribe | POST  | Subscribe to mentorship package             |
+| /mentors/packages/:subscriptionId/confirm-payment | POST | Confirm package payment            |
+| /mentors/mentorships                  | GET    | List my active mentorships                  |
+| /mentors/mentorships/:mentorshipId    | GET    | Get mentorship details                      |
+| /mentors/mentorships/:mentorshipId/sessions | GET | List sessions in mentorship              |
+| /mentors/mentorships/:mentorshipId/book-session | POST | Book session from package           |
+
+# SAVED MENTORS
+| Endpoint                              | Method | Purpose                                     |
+|---------------------------------------|--------|---------------------------------------------|
+| /mentors/saved                        | GET    | List saved/bookmarked mentors               |
+| /mentors/saved/:mentorId              | POST   | Save a mentor                               |
+| /mentors/saved/:mentorId              | DELETE | Remove from saved                           |
+
+# STARTUP-SPECIFIC ENDPOINTS
+| Endpoint                                    | Method | Purpose                                |
+|---------------------------------------------|--------|----------------------------------------|
+| /startup-portal/mentor/sessions             | GET    | List startup's mentor sessions         |
+| /startup-portal/mentor/sessions/:id         | GET    | Get session details                    |
+| /startup-portal/mentor/sessions/book        | POST   | Book session as startup                |
+| /startup-portal/mentor/mentorships          | GET    | List startup's mentorships             |
+| /startup-portal/mentor/spending             | GET    | Get startup's mentor spending          |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+MentorVerificationStatus:
+- PENDING
+- VERIFIED
+- REJECTED
+
+ProfileVisibility:
+- PUBLIC
+- PRIVATE
+
+MentorSessionStatus:
+- PENDING
+- CONFIRMED
+- COMPLETED
+- CANCELLED
+- NO_SHOW
+
+MentorPaymentStatus:
+- PENDING
+- PAID
+- INCUBATOR_BILLED
+- WAIVED
+- REFUNDED
+
+MenteeType:
+- USER
+- STARTUP
+
+BookingContext:
+- DIRECT         (Booking directly, no incubator benefits)
+- INCUBATOR      (Booking through incubator, may have subsidies)
+
+PaidBy:
+- MENTEE         (User/Startup pays full amount)
+- INCUBATOR      (Incubator pays full amount)
+- SPLIT          (Cost split between startup and incubator)
+- FREE           (No payment required)
+
+MentorshipStatus:
+- ACTIVE
+- COMPLETED
+- CANCELLED
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 100,
+      "totalPages": 10
+    }
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. DISCOVER MENTORS
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 BROWSE MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/discover
+Auth: User Token Required
+
+Purpose: Browse all verified mentors accepting sessions.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+- search (string) - Search by name, headline, bio
+- expertise (string | string[]) - Filter by expertise areas
+- industries (string | string[]) - Filter by industries
+- languages (string | string[]) - Filter by languages
+- minPrice (number) - Minimum session price
+- maxPrice (number) - Maximum session price
+- minRating (number) - Minimum rating (1-5)
+- availability (string) - Filter by availability ("today", "this_week")
+- sortBy ("rating" | "sessions" | "newest", default: "rating")
+
+Example: ?search=product&expertise=Growth&minRating=4&sortBy=rating
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentors fetched",
+  "data": {
+    "mentors": [
+      {
+        "id": "cuid_mentor_123",
+        "headline": "Senior Product Manager | 10+ Years Experience",
+        "bio": "Helping startups build great products...",
+        "expertise": ["Product Management", "Growth Strategy"],
+        "industries": ["SaaS", "FinTech"],
+        "languages": ["English", "Hindi"],
+        "experience": 10,
+        "rating": 4.8,
+        "reviewCount": 45,
+        "totalSessions": 120,
+        "isAccepting": true,
+        "isFeatured": true,
+        "user": {
+          "id": "...",
+          "firstName": "John",
+          "lastName": "Doe",
+          "avatarUrl": "..."
+        },
+        "sessionTypes": [
+          {
+            "id": "...",
+            "name": "1:1 Strategy Session",
+            "duration": 60,
+            "price": 2500
+          }
+        ]
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 12,
+      "total": 85,
+      "totalPages": 8
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 GET MENTOR PROFILE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/discover/:mentorId
+Auth: User Token Required
+
+Purpose: Get complete mentor profile with session types and packages.
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentor profile fetched",
+  "data": {
+    "id": "cuid_mentor_123",
+    "headline": "Senior Product Manager | 10+ Years Experience",
+    "bio": "Detailed bio here...",
+    "expertise": ["Product Management", "Growth Strategy", "Fundraising"],
+    "industries": ["SaaS", "FinTech", "HealthTech"],
+    "languages": ["English", "Hindi"],
+    "experience": 10,
+    "linkedinUrl": "https://linkedin.com/in/mentor",
+    "websiteUrl": "https://mentor.com",
+    "timezone": "Asia/Kolkata",
+    "rating": 4.8,
+    "reviewCount": 45,
+    "totalSessions": 120,
+    "isAccepting": true,
+    "isFeatured": true,
+    "user": {
+      "id": "...",
+      "firstName": "John",
+      "lastName": "Doe",
+      "email": "john@example.com",
+      "avatarUrl": "..."
+    },
+    "sessionTypes": [
+      {
+        "id": "cuid_session_type_1",
+        "name": "1:1 Strategy Session",
+        "description": "Deep dive into product strategy",
+        "duration": 60,
+        "price": 2500,
+        "currency": "INR"
+      }
+    ],
+    "packages": [
+      {
+        "id": "cuid_package_1",
+        "name": "Startup Growth Package",
+        "description": "3-month mentorship",
+        "sessionCount": 12,
+        "validityDays": 90,
+        "price": 25000,
+        "currency": "INR"
+      }
+    ],
+    "reviews": [
+      {
+        "id": "...",
+        "rating": 5,
+        "review": "Excellent mentor!",
+        "createdAt": "..."
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET SESSION TYPES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/discover/:mentorId/session-types
+Auth: User Token Required
+
+Purpose: Get all active session types offered by a mentor.
+
+Response (200):
+{
+  "success": true,
+  "message": "Session types fetched",
+  "data": [
+    {
+      "id": "cuid_session_type_1",
+      "name": "1:1 Strategy Session",
+      "description": "Deep dive into your product strategy",
+      "duration": 60,
+      "price": 2500,
+      "currency": "INR"
+    },
+    {
+      "id": "cuid_session_type_2",
+      "name": "Quick Call",
+      "description": "30-minute focused discussion",
+      "duration": 30,
+      "price": 1500,
+      "currency": "INR"
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+1.4 GET PACKAGES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/discover/:mentorId/packages
+Auth: User Token Required
+
+Purpose: Get all active mentorship packages offered by a mentor.
+
+Response (200):
+{
+  "success": true,
+  "message": "Packages fetched",
+  "data": [
+    {
+      "id": "cuid_package_1",
+      "name": "Startup Growth Package",
+      "description": "3-month intensive mentorship",
+      "sessionCount": 12,
+      "validityDays": 90,
+      "price": 25000,
+      "currency": "INR",
+      "features": [
+        "Weekly 1-hour sessions",
+        "Unlimited async support",
+        "Document reviews"
+      ]
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+1.5 GET AVAILABILITY
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/discover/:mentorId/availability
+Auth: User Token Required
+
+Purpose: Get available time slots for booking on a specific date.
+
+Query Parameters:
+- date (string, required) - ISO date (e.g., "2026-02-15")
+- sessionTypeId (string, optional) - To calculate slots based on duration
+
+Example: ?date=2026-02-15&sessionTypeId=cuid_session_type_1
+
+Response (200):
+{
+  "success": true,
+  "message": "Availability fetched",
+  "data": {
+    "date": "2026-02-15",
+    "timezone": "Asia/Kolkata",
+    "slots": [
+      {
+        "startTime": "09:00",
+        "endTime": "10:00",
+        "available": true
+      },
+      {
+        "startTime": "10:00",
+        "endTime": "11:00",
+        "available": false
+      },
+      {
+        "startTime": "11:00",
+        "endTime": "12:00",
+        "available": true
+      },
+      {
+        "startTime": "14:00",
+        "endTime": "15:00",
+        "available": true
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+1.6 GET REVIEWS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/discover/:mentorId/reviews
+Auth: User Token Required
+
+Purpose: Get mentor reviews with pagination.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+
+Response (200):
+{
+  "success": true,
+  "message": "Reviews fetched",
+  "data": {
+    "reviews": [
+      {
+        "id": "cuid_review_1",
+        "rating": 5,
+        "review": "Excellent mentor! Very insightful session.",
+        "createdAt": "2026-02-01T10:00:00Z",
+        "reviewer": {
+          "id": "...",
+          "firstName": "Jane",
+          "lastName": "S",
+          "avatarUrl": "..."
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 45,
+      "totalPages": 5
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.7 GET FEATURED MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/featured
+Auth: User Token Required
+
+Purpose: Get featured/highlighted mentors on the platform.
+
+Query Parameters:
+- limit (number, default: 6)
+
+Response (200):
+{
+  "success": true,
+  "message": "Featured mentors fetched",
+  "data": [
+    {
+      "id": "cuid_mentor_123",
+      "headline": "...",
+      "rating": 4.9,
+      "user": { ... },
+      "sessionTypes": [{ "price": 2500 }]
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+1.8 GET RECOMMENDED MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/recommended
+Auth: User Token Required
+
+Purpose: Get personalized mentor recommendations based on user profile.
+
+Query Parameters:
+- limit (number, default: 6)
+
+Response (200):
+{
+  "success": true,
+  "message": "Recommendations fetched",
+  "data": [
+    {
+      "id": "cuid_mentor_123",
+      "headline": "...",
+      "expertise": [...],
+      "rating": 4.8,
+      "user": { ... },
+      "sessionTypes": [{ "price": 2500 }]
+    }
+  ]
+}
+
+================================================================================
+2. INCUBATOR MENTORS (Startup-Specific)
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 GET INCUBATOR MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/mentor/incubator-mentors
+Auth: User Token Required (must have startup)
+
+Purpose: List mentors associated with startup's incubator (may have subsidies).
+
+Query Parameters:
+- startupId (string, optional) - Pass explicitly if needed
+- page (number, default: 1)
+- limit (number, default: 12)
+
+Response (200):
+{
+  "success": true,
+  "message": "Incubator mentors fetched",
+  "data": {
+    "mentors": [
+      {
+        "id": "cuid_mentor_123",
+        "headline": "Senior Product Manager",
+        "expertise": ["Product Management"],
+        "rating": 4.8,
+        "user": {
+          "firstName": "John",
+          "lastName": "Doe",
+          "avatarUrl": "..."
+        },
+        "sessionTypes": [...],
+        "incubatorSharePercent": 50,
+        "paymentModel": "SUBSIDIZED"
+      }
+    ],
+    "incubator": {
+      "id": "cuid_tenant_1",
+      "organizationName": "Innovation Hub"
+    },
+    "pagination": { ... }
+  }
+}
+
+Note: incubatorSharePercent indicates what % incubator pays.
+      50% means startup pays only 50% of session price.
+
+--------------------------------------------------------------------------------
+2.2 GET INCUBATOR MENTOR DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/mentor/incubator-mentors/:mentorId
+Auth: User Token Required
+
+Purpose: Get incubator mentor details with subsidy information.
+
+Query Parameters:
+- startupId (string, optional)
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentor details fetched",
+  "data": {
+    "mentor": {
+      "id": "cuid_mentor_123",
+      "headline": "...",
+      "bio": "...",
+      "expertise": [...],
+      "user": { ... },
+      "sessionTypes": [...],
+      "packages": [...]
+    },
+    "association": {
+      "paymentModel": "SUBSIDIZED",
+      "incubatorSharePercent": 50
+    },
+    "pricing": {
+      "sessionType": {
+        "id": "...",
+        "name": "1:1 Strategy",
+        "price": 2500
+      },
+      "originalPrice": 2500,
+      "incubatorSubsidy": 1250,
+      "startupPays": 1250
+    }
+  }
+}
+
+================================================================================
+3. BOOK SESSIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 BOOK SESSION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/book/:mentorId
+Auth: User Token Required
+
+Purpose: Book a session with a mentor. Returns Razorpay order if payment required.
+
+Request Body:
+{
+  "sessionTypeId": "cuid_session_type_1",
+  "scheduledAt": "2026-02-15T10:00:00Z",
+  "notes": "I want to discuss product roadmap for my SaaS startup",
+  "startupId": "cuid_startup_123"
+}
+
+Note: Include startupId to get incubator subsidies if available.
+
+Response (201) - Payment Required:
+{
+  "success": true,
+  "message": "Session created",
+  "data": {
+    "session": {
+      "id": "cuid_session_1",
+      "mentorId": "cuid_mentor_123",
+      "menteeType": "STARTUP",
+      "menteeId": "cuid_startup_123",
+      "startTime": "2026-02-15T10:00:00Z",
+      "endTime": "2026-02-15T11:00:00Z",
+      "duration": 60,
+      "price": 2500,
+      "status": "PENDING",
+      "paymentStatus": "PENDING",
+      "bookingContext": "INCUBATOR",
+      "paidBy": "SPLIT",
+      "incubatorShare": 1250,
+      "startupShare": 1250,
+      "sessionType": { ... }
+    },
+    "order": {
+      "id": "order_xxxxxxxxxxxx",
+      "amount": 125000,
+      "currency": "INR"
+    }
+  }
+}
+
+Note: order.amount is in paise (1250 * 100 = 125000)
+
+Response (201) - No Payment (Incubator Pays):
+{
+  "success": true,
+  "message": "Session booked - covered by incubator",
+  "data": {
+    "session": {
+      "id": "cuid_session_1",
+      "status": "CONFIRMED",
+      "paymentStatus": "INCUBATOR_BILLED",
+      "paidBy": "INCUBATOR",
+      "incubatorShare": 2500,
+      "startupShare": 0,
+      ...
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 CONFIRM SESSION PAYMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/:sessionId/confirm-payment
+Auth: User Token Required
+
+Purpose: Verify Razorpay payment and confirm session.
+
+Request Body:
+{
+  "razorpayPaymentId": "pay_xxxxxxxxxxxx",
+  "razorpaySignature": "signature_hash_string"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Payment confirmed",
+  "data": {
+    "id": "cuid_session_1",
+    "status": "CONFIRMED",
+    "paymentStatus": "PAID",
+    "paymentId": "pay_xxxxxxxxxxxx"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.3 GET MY SESSIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions
+Auth: User Token Required
+
+Purpose: List all sessions booked by user/startup.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status ("PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW")
+- upcoming (string, "true") - Filter upcoming sessions
+- past (string, "true") - Filter past sessions
+- startupId (string) - Filter by startup
+
+Response (200):
+{
+  "success": true,
+  "message": "Sessions fetched",
+  "data": {
+    "sessions": [
+      {
+        "id": "cuid_session_1",
+        "startTime": "2026-02-15T10:00:00Z",
+        "endTime": "2026-02-15T11:00:00Z",
+        "duration": 60,
+        "status": "CONFIRMED",
+        "paymentStatus": "PAID",
+        "price": 2500,
+        "mentor": {
+          "id": "...",
+          "user": {
+            "firstName": "John",
+            "lastName": "Doe",
+            "avatarUrl": "..."
+          }
+        },
+        "menteeUser": { ... },
+        "sessionType": {
+          "name": "1:1 Strategy Session"
+        }
+      }
+    ],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 GET SESSION DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/:sessionId
+Auth: User Token Required
+
+Purpose: Get complete session details.
+
+Response (200):
+{
+  "success": true,
+  "message": "Session fetched",
+  "data": {
+    "id": "cuid_session_1",
+    "mentorId": "cuid_mentor_123",
+    "menteeType": "STARTUP",
+    "menteeId": "cuid_startup_123",
+    "startTime": "2026-02-15T10:00:00Z",
+    "endTime": "2026-02-15T11:00:00Z",
+    "duration": 60,
+    "status": "CONFIRMED",
+    "paymentStatus": "PAID",
+    "price": 2500,
+    "bookingContext": "INCUBATOR",
+    "paidBy": "SPLIT",
+    "incubatorShare": 1250,
+    "startupShare": 1250,
+    "notes": "Product roadmap discussion",
+    "mentor": {
+      "id": "...",
+      "headline": "...",
+      "user": { ... }
+    },
+    "menteeUser": { ... },
+    "menteeStartup": {
+      "id": "...",
+      "name": "My Startup"
+    },
+    "sessionType": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.5 CANCEL SESSION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/:sessionId/cancel
+Auth: User Token Required
+
+Purpose: Cancel a pending/confirmed session. Refund based on cancellation timing.
+
+Request Body:
+{
+  "reason": "Schedule conflict"
+}
+
+Refund Policy:
+- More than 24 hours before: 100% refund
+- 12-24 hours before: 50% refund
+- Less than 12 hours: No refund
+
+Response (200):
+{
+  "success": true,
+  "message": "Session cancelled",
+  "data": {
+    "id": "...",
+    "status": "CANCELLED",
+    "cancelledBy": "cuid_user_123",
+    "cancelledByRole": "MENTEE",
+    "cancelReason": "Schedule conflict",
+    "cancelledAt": "2026-02-10T10:00:00Z",
+    "refundAmount": 1250,
+    "refundStatus": "PROCESSING",
+    "refundId": "rfnd_xxxxxxxxxxxx"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.6 RESCHEDULE SESSION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/:sessionId/reschedule
+Auth: User Token Required
+
+Purpose: Reschedule session to a new time.
+
+Request Body:
+{
+  "newScheduledAt": "2026-02-20T14:00:00Z",
+  "reason": "Conflict with meeting"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Session rescheduled",
+  "data": {
+    "id": "...",
+    "startTime": "2026-02-20T14:00:00Z",
+    "endTime": "2026-02-20T15:00:00Z",
+    "status": "CONFIRMED"
+  }
+}
+
+Error (409):
+{
+  "success": false,
+  "message": "This time slot is not available"
+}
+
+--------------------------------------------------------------------------------
+3.7 SUBMIT REVIEW
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/:sessionId/review
+Auth: User Token Required
+
+Purpose: Submit review after session is completed.
+
+Request Body:
+{
+  "rating": 5,
+  "comment": "Excellent session! Very helpful insights on product strategy."
+}
+
+Note: Can only review COMPLETED sessions. One review per session.
+
+Response (201):
+{
+  "success": true,
+  "message": "Review submitted",
+  "data": {
+    "id": "cuid_review_1",
+    "mentorId": "cuid_mentor_123",
+    "sessionId": "cuid_session_1",
+    "rating": 5,
+    "review": "Excellent session! Very helpful insights on product strategy.",
+    "createdAt": "2026-02-15T12:00:00Z"
+  }
+}
+
+Error (409):
+{
+  "success": false,
+  "message": "Review already submitted for this session"
+}
+
+--------------------------------------------------------------------------------
+3.8 GET VIDEO JOIN INFO
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/sessions/:sessionId/join
+Auth: User Token Required
+
+Purpose: Get Jitsi video call info. Available 10 minutes before session.
+
+Response (200):
+{
+  "success": true,
+  "message": "Join info fetched",
+  "data": {
+    "roomName": "mentor_session_cuid_session_1",
+    "token": "jwt_token_for_jitsi",
+    "meetingUrl": "https://meet.jit.si/mentor_session_cuid_session_1",
+    "session": {
+      "id": "...",
+      "startTime": "2026-02-15T10:00:00Z",
+      "duration": 60,
+      "mentor": {
+        "user": {
+          "firstName": "John",
+          "lastName": "Doe"
+        }
+      }
+    }
+  }
+}
+
+Error (400):
+{
+  "success": false,
+  "message": "You can only join 10 minutes before the session"
+}
+
+================================================================================
+4. MENTORSHIP PACKAGES
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 SUBSCRIBE TO PACKAGE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/packages/:packageId/subscribe
+Auth: User Token Required
+
+Purpose: Subscribe to a mentorship package. Returns Razorpay order.
+
+Request Body:
+{
+  "startupId": "cuid_startup_123"
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Subscription initiated",
+  "data": {
+    "mentorship": {
+      "id": "cuid_mentorship_1",
+      "mentorId": "cuid_mentor_123",
+      "menteeType": "STARTUP",
+      "menteeId": "cuid_startup_123",
+      "packageId": "cuid_package_1",
+      "status": "PENDING",
+      "sessionsTotal": 12,
+      "sessionsUsed": 0,
+      "validUntil": "2026-05-15"
+    },
+    "order": {
+      "id": "order_xxxxxxxxxxxx",
+      "amount": 2500000,
+      "currency": "INR"
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+4.2 CONFIRM PACKAGE PAYMENT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/packages/:subscriptionId/confirm-payment
+Auth: User Token Required
+
+Purpose: Verify Razorpay payment and activate mentorship.
+
+Request Body:
+{
+  "razorpayPaymentId": "pay_xxxxxxxxxxxx",
+  "razorpaySignature": "signature_hash_string"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentorship activated",
+  "data": {
+    "id": "cuid_mentorship_1",
+    "status": "ACTIVE",
+    "startDate": "2026-02-15",
+    "endDate": "2026-05-15",
+    "sessionsTotal": 12,
+    "sessionsUsed": 0
+  }
+}
+
+--------------------------------------------------------------------------------
+4.3 GET MY MENTORSHIPS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/mentorships
+Auth: User Token Required
+
+Purpose: List all active mentorships.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status ("ACTIVE" | "COMPLETED" | "CANCELLED")
+- startupId (string) - Filter by startup
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentorships fetched",
+  "data": {
+    "mentorships": [
+      {
+        "id": "cuid_mentorship_1",
+        "mentorId": "cuid_mentor_123",
+        "status": "ACTIVE",
+        "startDate": "2026-02-15",
+        "endDate": "2026-05-15",
+        "sessionsTotal": 12,
+        "sessionsUsed": 4,
+        "sessionsRemaining": 8,
+        "mentor": {
+          "headline": "Senior Product Manager",
+          "user": { ... }
+        },
+        "package": {
+          "name": "Startup Growth Package"
+        },
+        "menteeStartup": {
+          "name": "My Startup"
+        }
+      }
+    ],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+4.4 GET MENTORSHIP DETAILS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/mentorships/:mentorshipId
+Auth: User Token Required
+
+Purpose: Get complete mentorship details.
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentorship fetched",
+  "data": {
+    "id": "cuid_mentorship_1",
+    "status": "ACTIVE",
+    "startDate": "2026-02-15",
+    "endDate": "2026-05-15",
+    "sessionsTotal": 12,
+    "sessionsUsed": 4,
+    "sessionsRemaining": 8,
+    "amountPaid": 25000,
+    "mentor": { ... },
+    "package": { ... },
+    "menteeStartup": { ... },
+    "recentSessions": [...]
+  }
+}
+
+--------------------------------------------------------------------------------
+4.5 GET MENTORSHIP SESSIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/mentorships/:mentorshipId/sessions
+Auth: User Token Required
+
+Purpose: List all sessions within a mentorship.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+- status ("PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED")
+
+Response (200):
+{
+  "success": true,
+  "message": "Sessions fetched",
+  "data": {
+    "sessions": [
+      {
+        "id": "...",
+        "startTime": "...",
+        "status": "COMPLETED"
+      }
+    ],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+4.6 BOOK SESSION FROM PACKAGE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/mentorships/:mentorshipId/book-session
+Auth: User Token Required
+
+Purpose: Book a session using mentorship package (no additional payment).
+
+Request Body:
+{
+  "scheduledAt": "2026-02-20T10:00:00Z",
+  "notes": "Continue discussion on growth strategy"
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Session booked from package",
+  "data": {
+    "session": {
+      "id": "cuid_session_2",
+      "startTime": "2026-02-20T10:00:00Z",
+      "status": "CONFIRMED",
+      "paymentStatus": "WAIVED"
+    },
+    "mentorship": {
+      "sessionsUsed": 5,
+      "sessionsRemaining": 7
+    }
+  }
+}
+
+Error (400):
+{
+  "success": false,
+  "message": "No sessions remaining in package"
+}
+
+================================================================================
+5. SAVED MENTORS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 GET SAVED MENTORS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/mentors/saved
+Auth: User Token Required
+
+Purpose: List all bookmarked/saved mentors.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 10)
+
+Response (200):
+{
+  "success": true,
+  "message": "Saved mentors fetched",
+  "data": {
+    "mentors": [
+      {
+        "id": "cuid_mentor_123",
+        "headline": "...",
+        "rating": 4.8,
+        "user": { ... }
+      }
+    ],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+5.2 SAVE MENTOR
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/mentors/saved/:mentorId
+Auth: User Token Required
+
+Purpose: Bookmark/save a mentor for later.
+
+Response (201):
+{
+  "success": true,
+  "message": "Mentor saved",
+  "data": { "success": true }
+}
+
+--------------------------------------------------------------------------------
+5.3 UNSAVE MENTOR
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/mentors/saved/:mentorId
+Auth: User Token Required
+
+Purpose: Remove mentor from saved list.
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentor removed from saved",
+  "data": { "success": true }
+}
+
+================================================================================
+6. STARTUP-SPECIFIC ENDPOINTS
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 GET STARTUP SESSIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/mentor/sessions
+Auth: User Token Required
+
+Purpose: List all mentor sessions for the startup.
+
+Query Parameters:
+- startupId (string, optional)
+- page (number, default: 1)
+- limit (number, default: 10)
+- status (string) - Filter by status
+- upcoming (string, "true") - Filter upcoming
+
+Response (200):
+{
+  "success": true,
+  "message": "Sessions fetched",
+  "data": {
+    "sessions": [...],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+6.2 GET STARTUP MENTORSHIPS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/mentor/mentorships
+Auth: User Token Required
+
+Purpose: List all mentorships for the startup.
+
+Query Parameters:
+- startupId (string, optional)
+- page (number, default: 1)
+- limit (number, default: 10)
+
+Response (200):
+{
+  "success": true,
+  "message": "Mentorships fetched",
+  "data": {
+    "mentorships": [...],
+    "pagination": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+6.3 GET STARTUP MENTOR SPENDING
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/startup-portal/mentor/spending
+Auth: User Token Required
+
+Purpose: Get mentor spending summary for the startup.
+
+Query Parameters:
+- startupId (string, optional)
+- startDate (string) - ISO date
+- endDate (string) - ISO date
+
+Response (200):
+{
+  "success": true,
+  "message": "Spending fetched",
+  "data": {
+    "totalSpent": 37500,
+    "incubatorSubsidy": 18750,
+    "startupPaid": 18750,
+    "sessionsCount": 15,
+    "packagesCount": 1,
+    "byMentor": [
+      {
+        "mentor": { ... },
+        "sessions": 10,
+        "spent": 25000
+      }
+    ]
+  }
+}
+
+================================================================================
+PAYMENT FLOW EXAMPLES
+================================================================================
+
+Example 1: Direct Booking (No Incubator)
+-----------------------------------------
+1. User calls POST /mentors/sessions/book/:mentorId
+2. Backend returns session with Razorpay order
+3. Frontend initiates Razorpay checkout with order.id
+4. User completes payment on Razorpay
+5. Frontend receives payment success callback
+6. Frontend calls POST /sessions/:id/confirm-payment
+7. Session status changes to CONFIRMED
+
+Example 2: Incubator Subsidized Booking
+---------------------------------------
+1. Startup calls POST /mentors/sessions/book/:mentorId with startupId
+2. Backend checks incubator association for subsidy
+3. If 50% subsidy: order amount = 50% of session price
+4. Startup pays reduced amount via Razorpay
+5. Remaining 50% billed to incubator
+
+Example 3: Incubator Pays 100%
+------------------------------
+1. Startup calls POST /mentors/sessions/book/:mentorId with startupId
+2. Backend sees paymentModel = INCUBATOR_PAYS
+3. Session created with status CONFIRMED immediately
+4. No Razorpay order returned
+5. Full amount billed to incubator
+
+Example 4: Package Booking
+--------------------------
+1. Sessions within package don't require payment
+2. Call POST /mentorships/:id/book-session
+3. Session created immediately with status CONFIRMED
+4. sessionsUsed counter incremented
+
+================================================================================
+END OF USER & STARTUP MENTOR API DOCUMENTATION
+================================================================================

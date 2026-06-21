@@ -1,0 +1,298 @@
+================================================================================
+SOCIAL OAUTH -- DEVELOPER SETUP GUIDE
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-25
+
+This document explains which keys to generate, on which platform, and where
+to put them (frontend vs backend).
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. Google OAuth Setup
+2. Facebook OAuth Setup
+3. Apple Sign-In Setup
+4. Backend Environment Variables Summary
+5. Frontend Environment Variables Summary
+6. Quick Reference Table (Which Key Goes Where)
+
+================================================================================
+1. GOOGLE OAUTH SETUP
+================================================================================
+
+Platform: Google Cloud Console
+URL: https://console.cloud.google.com/
+
+Step-by-step:
+
+1. Go to https://console.cloud.google.com/
+2. Create a new project (or select existing)
+3. Navigate to: APIs & Services -> Credentials
+4. Click "Create Credentials" -> "OAuth 2.0 Client ID"
+5. If prompted, configure the OAuth consent screen first:
+   - User Type: External
+   - App name: Your app name
+   - User support email: your email
+   - Authorized domains: your domain (e.g., yourdomain.com)
+   - Scopes: email, profile, openid
+6. Back in Credentials, create OAuth Client ID:
+   - Application type: "Web application"
+   - Name: e.g., "Ecosystem Web Client"
+   - Authorized JavaScript origins:
+     - http://localhost:3000 (for development)
+     - https://yourdomain.com (for production)
+   - Authorized redirect URIs:
+     - http://localhost:3000 (for development)
+     - https://yourdomain.com (for production)
+7. After creation, you will see:
+   - Client ID: something like 123456789-abc.apps.googleusercontent.com
+   - Client Secret: GOCSPX-xxxxxxxxxx
+
+Keys Generated:
+  - GOOGLE_CLIENT_ID     -> Backend AND Frontend
+  - GOOGLE_CLIENT_SECRET -> NOT NEEDED (we use ID token verification, not auth code flow)
+
+Where to put:
+  Backend .env:
+    GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
+
+  Frontend .env:
+    VITE_GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
+
+Note: The Client ID is the SAME value on both frontend and backend.
+      The Client Secret is NOT needed for our implementation since we use
+      ID token verification (not the authorization code flow).
+
+================================================================================
+2. FACEBOOK OAUTH SETUP
+================================================================================
+
+Platform: Meta for Developers (Facebook Developer Portal)
+URL: https://developers.facebook.com/
+
+Step-by-step:
+
+1. Go to https://developers.facebook.com/
+2. Click "My Apps" -> "Create App"
+3. Choose app type: "Consumer" or "Business"
+4. Fill in app name and contact email
+5. Once created, go to: App Settings -> Basic
+   - You will see:
+     - App ID: a numeric ID like 1234567890
+     - App Secret: a hex string like abc123def456...
+6. Add the "Facebook Login" product:
+   - From the dashboard, click "Add Product"
+   - Select "Facebook Login" -> "Set Up"
+   - Choose "Web"
+7. Configure Facebook Login settings:
+   - Go to: Facebook Login -> Settings
+   - Valid OAuth Redirect URIs:
+     - http://localhost:3000 (development)
+     - https://yourdomain.com (production)
+   - Client OAuth Login: YES
+   - Web OAuth Login: YES
+   - Enforce HTTPS: YES (production)
+8. Go to: App Settings -> Basic
+   - App Domains: yourdomain.com
+   - Privacy Policy URL: required for going live
+   - Site URL: https://yourdomain.com
+
+IMPORTANT: Your app starts in "Development" mode.
+- In development mode, only admins/testers can log in
+- To let all users log in, you must switch to "Live" mode
+- To go Live: App Review -> Permissions and Features ->
+  Request "email" and "public_profile"
+- These are standard permissions and are usually auto-approved
+
+Keys Generated:
+  - FACEBOOK_APP_ID      -> Backend AND Frontend
+  - FACEBOOK_APP_SECRET  -> Backend ONLY (NEVER expose to frontend!)
+
+Where to put:
+  Backend .env:
+    FACEBOOK_APP_ID=1234567890
+    FACEBOOK_APP_SECRET=abc123def456ghi789...
+
+  Frontend .env:
+    VITE_FACEBOOK_APP_ID=1234567890
+
+SECURITY WARNING: The FACEBOOK_APP_SECRET must NEVER be exposed to the
+frontend. It is used server-side to generate app access tokens for
+token verification via the Facebook Graph API.
+
+================================================================================
+3. APPLE SIGN-IN SETUP
+================================================================================
+
+Platform: Apple Developer Account
+URL: https://developer.apple.com/
+
+Prerequisites:
+- You need a paid Apple Developer account ($99/year)
+- You need a registered App ID
+
+Step-by-step:
+
+A) Register an App ID (if not already done):
+   1. Go to: https://developer.apple.com/account/resources/identifiers/list
+   2. Click "+" to register a new identifier
+   3. Choose "App IDs" -> Continue
+   4. Choose "App" -> Continue
+   5. Fill in:
+      - Description: Your app name
+      - Bundle ID: com.yourcompany.yourapp (explicit)
+   6. Under Capabilities, check "Sign in with Apple"
+   7. Click Continue -> Register
+
+B) Create a Services ID (this is what the web frontend uses):
+   1. Go to: https://developer.apple.com/account/resources/identifiers/list
+   2. Click "+" -> Choose "Services IDs" -> Continue
+   3. Fill in:
+      - Description: e.g., "Ecosystem Web Login"
+      - Identifier: e.g., com.yourcompany.yourapp.web
+        (THIS becomes your APPLE_CLIENT_ID)
+   4. Click Continue -> Register
+   5. Click on the newly created Services ID
+   6. Check "Sign in with Apple" -> click "Configure"
+   7. Configure:
+      - Primary App ID: select your App ID from step A
+      - Domains: yourdomain.com
+      - Return URLs:
+        - https://yourdomain.com/auth/apple/callback (production)
+        - Note: Apple does NOT allow http:// for return URLs
+          For local development, use a tunnel like ngrok
+   8. Click Save -> Continue -> Save
+
+C) Create a Key for server-side verification:
+   1. Go to: https://developer.apple.com/account/resources/authkeys/list
+   2. Click "+" to create a new key
+   3. Key Name: e.g., "Sign in with Apple Key"
+   4. Check "Sign in with Apple"
+   5. Click "Configure" next to Sign in with Apple
+   6. Select your Primary App ID -> Save
+   7. Click Continue -> Register
+   8. DOWNLOAD the .p8 key file IMMEDIATELY
+      - You can only download it ONCE -- if you lose it, you must create a new key
+      - The file looks like: AuthKey_XXXXXXXXXX.p8
+      - The Key ID is shown on the page (10-character string like "ABC123DEF4")
+   9. Note down these values:
+      - Key ID: shown on the key page (e.g., ABC123DEF4)
+      - Team ID: shown at top-right of the developer portal (e.g., TEAMID1234)
+
+D) Get the private key content:
+   - Open the .p8 file in a text editor
+   - It looks like:
+     -----BEGIN PRIVATE KEY-----
+     MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg...
+     ...several lines...
+     -----END PRIVATE KEY-----
+   - You need the ENTIRE content including the BEGIN/END lines
+
+Keys Generated:
+  - APPLE_CLIENT_ID   -> Backend AND Frontend
+                         (the Services ID from step B, e.g., com.yourcompany.yourapp.web)
+  - APPLE_TEAM_ID     -> Backend ONLY
+  - APPLE_KEY_ID      -> Backend ONLY
+  - APPLE_PRIVATE_KEY -> Backend ONLY (the .p8 file contents)
+
+Where to put:
+  Backend .env:
+    APPLE_CLIENT_ID=com.yourcompany.yourapp.web
+    APPLE_TEAM_ID=TEAMID1234
+    APPLE_KEY_ID=ABC123DEF4
+    APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBM...\n-----END PRIVATE KEY-----"
+
+  Frontend .env:
+    VITE_APPLE_CLIENT_ID=com.yourcompany.yourapp.web
+
+Notes on the private key in .env:
+  - Replace actual newlines with \n and wrap in double quotes
+  - Or if your .env parser supports multiline, paste as-is
+
+SECURITY WARNING: APPLE_TEAM_ID, APPLE_KEY_ID, and APPLE_PRIVATE_KEY must
+NEVER be exposed to the frontend. They are used for server-side JWT
+verification only.
+
+================================================================================
+4. BACKEND ENVIRONMENT VARIABLES SUMMARY
+================================================================================
+
+Add these to your backend .env file:
+
+# ---- Google (already exists) ----
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+
+# ---- Facebook ----
+FACEBOOK_APP_ID=your-facebook-app-id
+FACEBOOK_APP_SECRET=your-facebook-app-secret
+
+# ---- Apple ----
+APPLE_CLIENT_ID=com.yourcompany.yourapp.web
+APPLE_TEAM_ID=your-apple-team-id
+APPLE_KEY_ID=your-apple-key-id
+APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+
+Total: 7 backend environment variables (1 Google + 2 Facebook + 4 Apple)
+
+================================================================================
+5. FRONTEND ENVIRONMENT VARIABLES SUMMARY
+================================================================================
+
+Add these to your frontend .env file:
+
+VITE_GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+VITE_FACEBOOK_APP_ID=your-facebook-app-id
+VITE_APPLE_CLIENT_ID=com.yourcompany.yourapp.web
+
+Adjust the prefix based on your frontend framework:
+  Vite:    VITE_
+  Next.js: NEXT_PUBLIC_
+  CRA:     REACT_APP_
+
+Total: 3 frontend environment variables (all PUBLIC, safe to expose)
+
+================================================================================
+6. QUICK REFERENCE TABLE (Which Key Goes Where)
+================================================================================
+
+| Key                  | Platform       | Backend | Frontend | Secret? |
+|----------------------|----------------|---------|----------|---------|
+| GOOGLE_CLIENT_ID     | Google Cloud   | YES     | YES      | No      |
+| GOOGLE_CLIENT_SECRET | Google Cloud   | NO      | NO       | N/A     |
+| FACEBOOK_APP_ID      | Meta Developer | YES     | YES      | No      |
+| FACEBOOK_APP_SECRET  | Meta Developer | YES     | NO       | YES     |
+| APPLE_CLIENT_ID      | Apple Dev      | YES     | YES      | No      |
+| APPLE_TEAM_ID        | Apple Dev      | YES     | NO       | YES     |
+| APPLE_KEY_ID         | Apple Dev      | YES     | NO       | YES     |
+| APPLE_PRIVATE_KEY    | Apple Dev (.p8)| YES     | NO       | YES     |
+
+Legend:
+- Backend YES  = add to backend .env
+- Frontend YES = add to frontend .env (with VITE_ or similar prefix)
+- Secret YES   = NEVER expose publicly, backend-only
+
+================================================================================
+CHECKLIST BEFORE GOING LIVE
+================================================================================
+
+[ ] Google Cloud Console: OAuth consent screen configured
+[ ] Google Cloud Console: OAuth 2.0 Client ID created
+[ ] Google Cloud Console: Authorized origins include production domain
+[ ] Facebook Developer Portal: App created with Facebook Login product
+[ ] Facebook Developer Portal: Valid OAuth Redirect URIs set
+[ ] Facebook Developer Portal: App switched from "Development" to "Live" mode
+[ ] Apple Developer Account: App ID registered with Sign in with Apple
+[ ] Apple Developer Account: Services ID created and configured
+[ ] Apple Developer Account: Key (.p8) generated and downloaded safely
+[ ] Backend .env: All 7 environment variables added
+[ ] Frontend .env: All 3 public environment variables added
+[ ] Database: Prisma migration applied (LinkedAccount table + passwordHash optional)
+[ ] Test: Google login works (new user + existing user)
+[ ] Test: Facebook login works (new user + existing user)
+[ ] Test: Apple login works (new user + existing user)
+[ ] Test: Account linking works from settings page
+[ ] Test: Account unlinking works (with last-method protection)
+[ ] Test: Email/password login shows correct message for OAuth-only users

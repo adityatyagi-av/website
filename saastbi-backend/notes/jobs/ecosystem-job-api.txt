@@ -1,0 +1,2548 @@
+================================================================================
+JOB MODULE API - ECOSYSTEM (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-07
+Base URL: /api/ecosystem
+
+Authentication: User Bearer Token (authenticate middleware)
+Optional Auth: optionalAuthenticate middleware (for public job discovery)
+
+================================================================================
+JOB MODULE FLOW
+================================================================================
+
+The Job module allows Pages (companies, startups, organizations) to post jobs,
+manage applications, and run a complete hiring pipeline. Users (applicants) can
+discover jobs, apply, track applications, set up alerts, and get referrals.
+This is a purely ecosystem/page-driven module.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        ECOSYSTEM JOB MODULE                                  │
+│                    Base: /api/ecosystem                                       │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  EMPLOYER SIDE (Page Owner/Admin):                                           │
+│  • Create, edit, duplicate, and manage job postings                          │
+│  • Add screening questions with auto-scoring                                 │
+│  • View and manage application pipeline                                      │
+│  • Rate applicants, add notes, export applications                           │
+│  • Hiring dashboard with analytics                                           │
+│  • Manage referrals from page members                                        │
+│                                                                              │
+│  APPLICANT SIDE (Authenticated User):                                        │
+│  • Discover jobs with 15+ filters and sorting                                │
+│  • Get AI-powered recommended jobs based on profile                          │
+│  • View trending jobs and jobs by skill                                      │
+│  • Apply with resume, cover letter, screening answers                        │
+│  • Track application status and get insights                                 │
+│  • Bookmark jobs, set up job alerts                                          │
+│  • Get skill gap analysis for any job                                        │
+│  • Refer candidates (page members only)                                      │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+ACCESS CONTROL:
+--------------------------------------------------------------------------------
+
+Employer (Page-side) operations:
+  • OWNER / ADMIN: Full job management, application pipeline, dashboard
+  • EDITOR: View page jobs and job detail
+  • Other roles: No access to employer operations
+
+Applicant (User-side) operations:
+  • Authenticated users: Apply, bookmark, track apps, alerts, referrals
+  • Optional auth (public): Browse jobs, view job detail, trending, by-skill
+
+Referrals:
+  • Only page members can refer candidates for their page's jobs
+
+================================================================================
+JOB LIFECYCLE
+================================================================================
+
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│  DRAFT   │────▶│   OPEN   │────▶│  PAUSED  │
+└──────────┘     └──────────┘     └──────────┘
+                      │  │              │
+                      │  │              ▼
+                      │  │         ┌──────────┐
+                      │  └────────▶│  CLOSED  │
+                      │            └──────────┘
+                      ▼
+                 ┌──────────┐
+                 │  FILLED  │
+                 └──────────┘
+
+Valid Transitions:
+  • DRAFT    → OPEN
+  • OPEN     → PAUSED, CLOSED, FILLED
+  • PAUSED   → OPEN, CLOSED
+  • CLOSED   → (terminal)
+  • FILLED   → (terminal)
+
+Status Meanings:
+  • DRAFT    → Job created, not visible to applicants
+  • OPEN     → Actively accepting applications
+  • PAUSED   → Temporarily not accepting applications
+  • CLOSED   → Job posting closed, no more applications
+  • FILLED   → Position has been filled
+
+Note: When a job is CLOSED or FILLED, all active applications
+(APPLIED, SCREENING) are automatically set to WITHDRAWN.
+
+================================================================================
+APPLICATION LIFECYCLE
+================================================================================
+
+┌──────────┐     ┌──────────┐     ┌────────────┐     ┌──────────────┐
+│ APPLIED  │────▶│  VIEWED  │────▶│ SCREENING  │────▶│ INTERVIEWING │
+└──────────┘     └──────────┘     └────────────┘     └──────────────┘
+     │                │                 │                     │
+     │                │                 │                     ▼
+     │                │                 │               ┌──────────┐
+     │                │                 └──────────────▶│ OFFERED  │
+     │                │                                 └──────────┘
+     │                │                                       │
+     │                │                 ┌──────────┐          │
+     └────────────────┴────────────────▶│ REJECTED │◀─────────┤
+                                        └──────────┘          │
+                                                              ▼
+     ┌───────────┐                                     ┌──────────┐
+     │ WITHDRAWN │                                     │  HIRED   │
+     └───────────┘                                     └──────────┘
+
+Valid Transitions:
+  • APPLIED       → VIEWED, SCREENING, INTERVIEWING, OFFERED, REJECTED
+  • VIEWED        → SCREENING, INTERVIEWING, OFFERED, REJECTED
+  • SCREENING     → INTERVIEWING, OFFERED, REJECTED
+  • INTERVIEWING  → OFFERED, REJECTED
+  • OFFERED       → HIRED, REJECTED
+  • HIRED         → (terminal)
+  • REJECTED      → (terminal)
+  • WITHDRAWN     → (terminal, set by applicant or system)
+
+================================================================================
+MATCH SCORE ALGORITHM
+================================================================================
+
+The system computes a 0-100 match score for each applicant-job pair.
+
+Scoring Breakdown:
+  • Required Skills Match (40%): Percentage of required skills the user has
+  • Experience Level (20%): Exact match = 20, 1 level off = 12, 2 = 5
+  • Work Mode / Location (10%): Remote = 10, city match = 10, no match = 2
+  • Education (10%): Has education + job requires = 10, has education = 7
+  • Nice-to-Have Skills (10%): Bonus points for matching optional skills
+  • No specific skills: Default 20 if job has no required skills
+
+================================================================================
+TYPICAL WORKFLOWS
+================================================================================
+
+EMPLOYER WORKFLOW: Post and Manage a Job
+--------------------------------------------------------------------------------
+
+Step 1: Create Job
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/job
+→ Create job with title, description, skills, salary range, etc.
+→ Set status to DRAFT or OPEN
+
+Step 2: Add Screening Questions (Optional)
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/job/:jobId/screening-question
+→ Add questions applicants must answer
+→ Mark questions as required or eliminatory
+→ Set expected answers for auto-scoring
+
+Step 3: Publish Job
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/ecosystem/job/:jobId/status  { "status": "OPEN" }
+→ Job becomes visible to applicants
+→ Page's openPositions counter updates
+
+Step 4: Review Applications
+─────────────────────────────────────────────────────────────────────────────
+GET /api/ecosystem/job/:jobId/applications
+→ Filter by status, source, match score
+→ Sort by date, match score
+
+Step 5: Process Application Pipeline
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/ecosystem/job/application/:applicationId/status
+→ Move applicants through: APPLIED → VIEWED → SCREENING → INTERVIEWING → OFFERED → HIRED
+→ Applicant receives email notification on each status change
+
+Step 6: Rate and Add Notes
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/job/application/:applicationId/rate
+POST /api/ecosystem/job/application/:applicationId/note
+→ Collaborate with team on candidate evaluation
+
+Step 7: Export Applications
+─────────────────────────────────────────────────────────────────────────────
+GET /api/ecosystem/job/:jobId/applications/export
+→ Get all application data in exportable format
+
+Step 8: Close/Fill Position
+─────────────────────────────────────────────────────────────────────────────
+PATCH /api/ecosystem/job/:jobId/status  { "status": "FILLED" }
+→ Active applications auto-withdrawn
+→ Page counters updated
+
+
+APPLICANT WORKFLOW: Discover and Apply for Jobs
+--------------------------------------------------------------------------------
+
+Step 1: Browse Jobs
+─────────────────────────────────────────────────────────────────────────────
+GET /api/ecosystem/job/discover
+→ Search with 15+ filters (type, mode, experience, salary, skills, etc.)
+→ Or GET /api/ecosystem/job/recommended for AI-matched jobs
+
+Step 2: View Job Detail
+─────────────────────────────────────────────────────────────────────────────
+GET /api/ecosystem/job/:slug
+→ Full job info, match score, similar jobs, connections at company
+
+Step 3: Check Skill Gap (Optional)
+─────────────────────────────────────────────────────────────────────────────
+GET /api/ecosystem/job/:jobId/skill-gap
+→ See which required/optional skills you have vs missing
+→ Get prioritized learning recommendations
+
+Step 4: Apply for Job
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/job/:jobId/apply
+→ Submit resume, cover letter, screening answers
+→ Match score computed automatically
+→ Confirmation email sent to applicant
+→ Notification email sent to hiring manager
+
+Step 5: Track Application
+─────────────────────────────────────────────────────────────────────────────
+GET /api/ecosystem/job/my-applications
+GET /api/ecosystem/job/my-applications/:applicationId/insights
+→ View status, timeline, anonymized comparison stats
+
+Step 6: Set Up Alerts
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/job/alert
+→ Get notified when new jobs match your criteria
+→ Choose INSTANT, DAILY, or WEEKLY frequency
+
+
+FLOW DIAGRAM - JOB POSTING TO HIRE:
+--------------------------------------------------------------------------------
+
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Create Job     │────▶│  Add Screening  │────▶│  Publish Job    │
+│  POST /job      │     │  Questions      │     │  PATCH /status  │
+│  (DRAFT)        │     │  POST /question │     │  (OPEN)         │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                    ┌───────────────────────────────────┘
+                    ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ Review Apps     │────▶│  Rate & Note    │────▶│  Move Pipeline  │
+│ GET /apps       │     │  POST /rate     │     │  PATCH /status  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                    ┌───────────────────────────────────┘
+                    ▼
+            ┌─────────────────┐     ┌─────────────────┐
+            │  Offer / Hire   │────▶│  Close / Fill   │
+            │  PATCH /status  │     │  PATCH /status  │
+            │  (OFFERED/HIRED)│     │  (FILLED)       │
+            └─────────────────┘     └─────────────────┘
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# APPLICANT: JOB DISCOVERY
+| Endpoint                                | Method | Auth     | Purpose                                |
+|-----------------------------------------|--------|----------|----------------------------------------|
+| /job/discover                           | GET    | Optional | Search/filter jobs (15+ filters)       |
+| /job/recommended                        | GET    | Required | AI-recommended jobs based on profile   |
+| /job/trending                           | GET    | Optional | Trending jobs (by views & apps)        |
+| /job/bookmarked                         | GET    | Required | Get user's bookmarked jobs             |
+| /job/by-skill/:skillName                | GET    | Optional | Jobs matching a specific skill         |
+| /job/:slug                              | GET    | Optional | Job detail page (by slug)              |
+| /job/:jobId/similar                     | GET    | Optional | Similar jobs based on skills/category  |
+| /job/:jobId/connections                 | GET    | Required | Your connections at the company         |
+| /job/:jobId/skill-gap                   | GET    | Required | Skill gap analysis for a job           |
+
+# APPLICANT: APPLICATIONS
+| Endpoint                                        | Method | Auth     | Purpose                        |
+|-------------------------------------------------|--------|----------|--------------------------------|
+| /job/:jobId/apply                               | POST   | Required | Apply for a job                |
+| /job/application/:applicationId/withdraw        | POST   | Required | Withdraw your application      |
+| /job/my-applications                            | GET    | Required | List all my applications       |
+| /job/my-applications/:applicationId             | GET    | Required | Application detail + timeline  |
+| /job/my-applications/:applicationId/insights    | GET    | Required | Anonymized comparison stats    |
+
+# APPLICANT: BOOKMARKS
+| Endpoint                                | Method | Auth     | Purpose                        |
+|-----------------------------------------|--------|----------|--------------------------------|
+| /job/:jobId/bookmark                    | POST   | Required | Toggle bookmark on/off         |
+
+# APPLICANT: ALERTS
+| Endpoint                                | Method | Auth     | Purpose                        |
+|-----------------------------------------|--------|----------|--------------------------------|
+| /job/alert                              | POST   | Required | Create a job alert             |
+| /job/alerts                             | GET    | Required | List my alerts                 |
+| /job/alert/:alertId                     | PATCH  | Required | Update alert criteria          |
+| /job/alert/:alertId                     | DELETE | Required | Delete an alert                |
+| /job/alert/:alertId/toggle              | PATCH  | Required | Enable/disable alert           |
+
+# APPLICANT: REFERRALS
+| Endpoint                                | Method | Auth     | Purpose                        |
+|-----------------------------------------|--------|----------|--------------------------------|
+| /job/:jobId/refer-candidate             | POST   | Required | Refer someone (page member)    |
+| /job/my-referrals                       | GET    | Required | List referrals I've made       |
+
+# EMPLOYER: PAGE JOBS & DASHBOARD
+| Endpoint                                | Method | Auth     | Purpose                        |
+|-----------------------------------------|--------|----------|--------------------------------|
+| /job/page/:pageId                       | GET    | Required | List all jobs for a page       |
+| /job/page/:pageId/dashboard             | GET    | Required | Hiring dashboard with stats    |
+
+# EMPLOYER: JOB CRUD
+| Endpoint                                | Method | Auth     | Purpose                        |
+|-----------------------------------------|--------|----------|--------------------------------|
+| /job                                    | POST   | Required | Create a new job               |
+| /job/:jobId                             | PATCH  | Required | Update job details             |
+| /job/:jobId/status                      | PATCH  | Required | Change job status              |
+| /job/:jobId/duplicate                   | POST   | Required | Duplicate a job (DRAFT copy)   |
+| /job/:jobId                             | DELETE | Required | Close a job (soft delete)       |
+| /job/:jobId/detail                      | GET    | Required | Job detail + analytics         |
+
+# EMPLOYER: SCREENING QUESTIONS
+| Endpoint                                        | Method | Auth     | Purpose                        |
+|-------------------------------------------------|--------|----------|--------------------------------|
+| /job/:jobId/screening-question                  | POST   | Required | Add screening question         |
+| /job/screening-question/:questionId             | PATCH  | Required | Update screening question      |
+| /job/:jobId/screening-questions/reorder         | PATCH  | Required | Reorder questions              |
+| /job/screening-question/:questionId             | DELETE | Required | Delete screening question      |
+
+# EMPLOYER: APPLICATION PIPELINE
+| Endpoint                                        | Method | Auth     | Purpose                        |
+|-------------------------------------------------|--------|----------|--------------------------------|
+| /job/:jobId/applications                        | GET    | Required | List applications for a job    |
+| /job/application/:applicationId                 | GET    | Required | Full application detail        |
+| /job/application/:applicationId/status          | PATCH  | Required | Change application status      |
+| /job/:jobId/applications/bulk-status            | POST   | Required | Bulk change application status |
+| /job/application/:applicationId/note            | POST   | Required | Add note to application        |
+| /job/application/:applicationId/rate            | POST   | Required | Rate application (1-5)         |
+| /job/applicant/:applicantId/profile             | GET    | Required | View applicant's full profile  |
+| /job/:jobId/applications/export                 | GET    | Required | Export all applications         |
+
+# EMPLOYER: REFERRALS
+| Endpoint                                | Method | Auth     | Purpose                        |
+|-----------------------------------------|--------|----------|--------------------------------|
+| /job/:jobId/referrals                   | GET    | Required | View referrals for a job       |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+JobType:
+- FULL_TIME
+- PART_TIME
+- CONTRACT
+- INTERNSHIP
+- FREELANCE
+- TEMPORARY
+- VOLUNTEER
+
+WorkMode:
+- REMOTE
+- ONSITE
+- HYBRID
+
+ExperienceLevel:
+- ENTRY
+- JUNIOR
+- MID
+- SENIOR
+- LEAD
+- EXECUTIVE
+
+JobStatus:
+- DRAFT       (Not visible to applicants)
+- OPEN        (Accepting applications)
+- PAUSED      (Temporarily not accepting)
+- CLOSED      (Job closed)
+- FILLED      (Position filled)
+
+JobApplicationStatus:
+- APPLIED      (Application submitted)
+- VIEWED       (Employer has viewed)
+- SCREENING    (Under screening review)
+- INTERVIEWING (In interview process)
+- OFFERED      (Offer extended)
+- HIRED        (Candidate hired)
+- REJECTED     (Application rejected)
+- WITHDRAWN    (Withdrawn by applicant or system)
+
+SalaryPeriod:
+- HOURLY
+- DAILY
+- WEEKLY
+- MONTHLY
+- YEARLY
+
+JobUrgency:
+- NORMAL
+- URGENT
+- CRITICAL
+
+ScreeningQuestionType:
+- TEXT              (Free text answer)
+- SINGLE_CHOICE    (Pick one option)
+- MULTIPLE_CHOICE  (Pick multiple options)
+- YES_NO           (Boolean answer)
+- NUMERIC          (Number answer)
+
+JobAlertFrequency:
+- INSTANT    (Every 30 minutes)
+- DAILY      (Once daily at 8 AM)
+- WEEKLY     (Once weekly on Monday 8 AM)
+
+ReferralStatus:
+- PENDING    (Referral sent, awaiting application)
+- APPLIED    (Referred person has applied)
+- HIRED      (Referred person was hired)
+- EXPIRED    (Referral expired after 60 days)
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "jobs": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+================================================================================
+1. EMPLOYER: JOB CRUD OPERATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 CREATE JOB
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job
+Auth: User Token Required (must be OWNER or ADMIN of the page)
+
+Purpose: Create a new job posting for a page.
+
+Request Body:
+{
+  "title": "Senior Full Stack Developer",
+  "description": "We are looking for an experienced full stack developer...",
+  "pageId": "cuid_page_123",
+  "jobType": "FULL_TIME",
+  "workMode": "HYBRID",
+  "experienceLevel": "SENIOR",
+  "requirements": "5+ years experience in React and Node.js...",
+  "responsibilities": "Lead feature development, mentor junior devs...",
+  "benefits": "Health insurance, equity, remote flexibility...",
+  "location": "San Francisco, CA",
+  "salaryMin": 150000,
+  "salaryMax": 200000,
+  "currency": "USD",
+  "salaryPeriod": "YEARLY",
+  "showSalary": true,
+  "skills": ["JavaScript", "React", "Node.js"],
+  "requiredSkills": ["React", "Node.js", "PostgreSQL"],
+  "niceToHaveSkills": ["AWS", "Docker", "GraphQL"],
+  "status": "DRAFT",
+  "deadline": "2026-03-15T00:00:00.000Z",
+  "isRemote": false,
+  "isConfidential": false,
+  "department": "Engineering",
+  "industry": "Technology",
+  "categoryId": "cuid_category_1",
+  "urgency": "NORMAL",
+  "numberOfOpenings": 2,
+  "applicationLimit": 200,
+  "minimumExperience": 5,
+  "maximumExperience": 10,
+  "educationLevel": "Bachelor's Degree",
+  "hiringManagerId": "cuid_user_456"
+}
+
+Field Details:
+- title (string, required): Job title, 3-200 characters
+- description (string, required): Full job description
+- pageId (string, required): ID of the page posting this job
+- jobType (enum, required): FULL_TIME | PART_TIME | CONTRACT | INTERNSHIP | FREELANCE | TEMPORARY | VOLUNTEER
+- workMode (enum, required): REMOTE | ONSITE | HYBRID
+- experienceLevel (enum, required): ENTRY | JUNIOR | MID | SENIOR | LEAD | EXECUTIVE
+- requirements (string, optional): Job requirements text
+- responsibilities (string, optional): Job responsibilities text
+- benefits (string, optional): Benefits/perks text
+- location (string, optional): Job location
+- salaryMin (number, optional): Minimum salary
+- salaryMax (number, optional): Maximum salary (must be >= salaryMin)
+- currency (string, optional): Currency code (default: "USD")
+- salaryPeriod (enum, optional): HOURLY | DAILY | WEEKLY | MONTHLY | YEARLY (default: "YEARLY")
+- showSalary (boolean, optional): Whether to show salary publicly (default: true)
+- skills (string[], optional): General skill tags
+- requiredSkills (string[], optional): Must-have skills for matching
+- niceToHaveSkills (string[], optional): Bonus skills for matching
+- status (enum, optional): DRAFT | OPEN (default: "DRAFT")
+- applicationUrl (string, optional): External application URL
+- applicationEmail (string, optional): Application email address
+- deadline (date, optional): Application deadline (must be future date)
+- isRemote (boolean, optional): Whether fully remote (default: false)
+- isConfidential (boolean, optional): Hide company details (default: false)
+- department (string, optional): Department name
+- industry (string, optional): Industry name
+- categoryId (string, optional): Job category ID
+- urgency (enum, optional): NORMAL | URGENT | CRITICAL (default: "NORMAL")
+- numberOfOpenings (number, optional): Number of positions (default: 1)
+- applicationLimit (number, optional): Max applications to accept
+- minimumExperience (number, optional): Min years of experience
+- maximumExperience (number, optional): Max years of experience
+- educationLevel (string, optional): Required education level
+- hiringManagerId (string, optional): User ID of hiring manager
+
+Response (201):
+{
+  "success": true,
+  "message": "Job created",
+  "data": {
+    "id": "cuid_job_123",
+    "title": "Senior Full Stack Developer",
+    "slug": "senior-full-stack-developer",
+    "description": "We are looking for...",
+    "status": "DRAFT",
+    "jobType": "FULL_TIME",
+    "workMode": "HYBRID",
+    "experienceLevel": "SENIOR",
+    "location": "San Francisco, CA",
+    "salaryMin": 150000,
+    "salaryMax": 200000,
+    "currency": "USD",
+    "salaryPeriod": "YEARLY",
+    "showSalary": true,
+    "skills": ["JavaScript", "React", "Node.js"],
+    "requiredSkills": ["React", "Node.js", "PostgreSQL"],
+    "niceToHaveSkills": ["AWS", "Docker", "GraphQL"],
+    "urgency": "NORMAL",
+    "numberOfOpenings": 2,
+    "applicationCount": 0,
+    "viewCount": 0,
+    "page": {
+      "id": "cuid_page_123",
+      "name": "TechCorp",
+      "slug": "techcorp",
+      "logo": "https://...",
+      "type": "COMPANY",
+      "teamSize": "50-100",
+      "sector": "Technology"
+    },
+    "category": {
+      "id": "cuid_category_1",
+      "name": "Software Engineering",
+      "slug": "software-engineering"
+    },
+    "hiringManager": {
+      "id": "cuid_user_456",
+      "firstName": "Jane",
+      "lastName": "Smith",
+      "headline": "VP of Engineering"
+    },
+    "_count": {
+      "applications": 0,
+      "bookmarks": 0,
+      "screeningQuestions": 0
+    },
+    "createdAt": "2026-02-07T10:00:00.000Z",
+    "updatedAt": "2026-02-07T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+1.2 UPDATE JOB
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Update job properties. If title changes, slug is regenerated.
+
+Request Body (all fields optional):
+{
+  "title": "Senior Full Stack Developer - Remote",
+  "salaryMax": 220000,
+  "niceToHaveSkills": ["AWS", "Docker", "GraphQL", "Kubernetes"],
+  "urgency": "URGENT"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Job updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+1.3 CHANGE JOB STATUS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/status
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Transition job between statuses. See lifecycle diagram above.
+
+Request Body:
+{
+  "status": "OPEN"
+}
+
+Valid Statuses: DRAFT | OPEN | PAUSED | CLOSED | FILLED
+
+Notes:
+- When set to CLOSED or FILLED, all active applications (APPLIED, SCREENING)
+  are automatically set to WITHDRAWN with timeline entries
+- Page's openPositions and isHiring counters are updated
+
+Response (200):
+{
+  "success": true,
+  "message": "Job status updated",
+  "data": {
+    "id": "cuid_job_123",
+    "status": "OPEN",
+    "page": { ... },
+    "_count": { ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 DUPLICATE JOB
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/duplicate
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Create a copy of an existing job in DRAFT status. Copies all job
+fields and screening questions. Does not copy applications.
+
+Response (201):
+{
+  "success": true,
+  "message": "Job duplicated",
+  "data": {
+    "id": "cuid_job_new",
+    "title": "Senior Full Stack Developer (Copy)",
+    "slug": "senior-full-stack-developer-1",
+    "status": "DRAFT",
+    ...
+  }
+}
+
+--------------------------------------------------------------------------------
+1.5 DELETE JOB (SOFT CLOSE)
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Close a job. Sets status to CLOSED, withdraws active applications.
+
+Response (200):
+{
+  "success": true,
+  "message": "Job closed successfully",
+  "data": {
+    "message": "Job closed successfully"
+  }
+}
+
+--------------------------------------------------------------------------------
+1.6 GET PAGE JOBS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/page/:pageId
+Auth: User Token Required (OWNER, ADMIN, or EDITOR of the page)
+
+Purpose: List all jobs for a page with pagination and filters.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- search (string): Search in title and department
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): Filter by job status
+- jobType (enum): Filter by job type
+- workMode (enum): Filter by work mode
+- urgency (enum): Filter by urgency
+
+Example: ?status=OPEN&urgency=URGENT&search=developer
+
+Response (200):
+{
+  "success": true,
+  "message": "Page jobs fetched",
+  "data": {
+    "jobs": [
+      {
+        "id": "cuid_job_123",
+        "title": "Senior Full Stack Developer",
+        "slug": "senior-full-stack-developer",
+        "status": "OPEN",
+        "jobType": "FULL_TIME",
+        "workMode": "HYBRID",
+        "experienceLevel": "SENIOR",
+        "location": "San Francisco, CA",
+        "urgency": "NORMAL",
+        "applicationCount": 45,
+        "page": { "id": "...", "name": "TechCorp", ... },
+        "category": { "id": "...", "name": "Software Engineering" },
+        "hiringManager": { "id": "...", "firstName": "Jane", ... },
+        "_count": {
+          "applications": 45,
+          "bookmarks": 12,
+          "screeningQuestions": 3
+        },
+        "createdAt": "2026-02-07T10:00:00.000Z"
+      }
+    ],
+    "total": 8,
+    "page": 1,
+    "limit": 20
+  }
+}
+
+--------------------------------------------------------------------------------
+1.7 GET JOB DETAIL (EMPLOYER VIEW)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/detail
+Auth: User Token Required (OWNER, ADMIN, or EDITOR of the page)
+
+Purpose: Get full job detail with analytics (application status breakdown).
+
+Response (200):
+{
+  "success": true,
+  "message": "Job detail fetched",
+  "data": {
+    "job": {
+      "id": "cuid_job_123",
+      "title": "Senior Full Stack Developer",
+      "description": "...",
+      "requirements": "...",
+      "responsibilities": "...",
+      "benefits": "...",
+      "status": "OPEN",
+      "page": { ... },
+      "category": { ... },
+      "hiringManager": { ... },
+      "postedBy": { ... },
+      "screeningQuestions": [
+        {
+          "id": "cuid_q_1",
+          "questionText": "How many years of React experience?",
+          "questionType": "NUMERIC",
+          "options": null,
+          "isRequired": true,
+          "isEliminatory": true,
+          "expectedAnswer": 3,
+          "orderIndex": 0
+        }
+      ],
+      "_count": {
+        "applications": 45,
+        "bookmarks": 12,
+        "views": 320
+      }
+    },
+    "analytics": {
+      "statusBreakdown": [
+        { "status": "APPLIED", "_count": { "status": 20 } },
+        { "status": "SCREENING", "_count": { "status": 10 } },
+        { "status": "INTERVIEWING", "_count": { "status": 8 } },
+        { "status": "OFFERED", "_count": { "status": 3 } },
+        { "status": "HIRED", "_count": { "status": 2 } },
+        { "status": "REJECTED", "_count": { "status": 2 } }
+      ]
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.8 GET HIRING DASHBOARD
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/page/:pageId/dashboard
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Get comprehensive hiring analytics for a page.
+
+Response (200):
+{
+  "success": true,
+  "message": "Dashboard fetched",
+  "data": {
+    "totalOpen": 5,
+    "totalJobs": 12,
+    "applications": {
+      "thisWeek": 23,
+      "thisMonth": 87,
+      "total": 345
+    },
+    "statusBreakdown": [
+      { "status": "APPLIED", "_count": { "status": 120 } },
+      { "status": "SCREENING", "_count": { "status": 45 } },
+      ...
+    ],
+    "urgentJobs": [
+      { "id": "...", "title": "...", "urgency": "URGENT", ... }
+    ],
+    "topJobs": [
+      { "id": "...", "title": "...", "applicationCount": 89, ... }
+    ]
+  }
+}
+
+================================================================================
+2. EMPLOYER: SCREENING QUESTIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 ADD SCREENING QUESTION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/screening-question
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Add a screening question to a job. Applicants must answer these
+when applying. Eliminatory questions are auto-scored.
+
+Request Body:
+{
+  "questionText": "How many years of React experience do you have?",
+  "questionType": "NUMERIC",
+  "options": null,
+  "isRequired": true,
+  "isEliminatory": true,
+  "expectedAnswer": 3
+}
+
+Field Details:
+- questionText (string, required): The question text, max 500 chars
+- questionType (enum, required): TEXT | SINGLE_CHOICE | MULTIPLE_CHOICE | YES_NO | NUMERIC
+- options (string[], conditional): Required for SINGLE_CHOICE and MULTIPLE_CHOICE (min 2 items)
+- isRequired (boolean, optional): Must applicant answer this? (default: false)
+- isEliminatory (boolean, optional): Auto-score based on expected answer? (default: false)
+- expectedAnswer (any, conditional): Required when isEliminatory is true
+
+Examples for different question types:
+
+TEXT:
+{
+  "questionText": "Why are you interested in this role?",
+  "questionType": "TEXT",
+  "isRequired": true,
+  "isEliminatory": false
+}
+
+SINGLE_CHOICE:
+{
+  "questionText": "Are you authorized to work in the US?",
+  "questionType": "SINGLE_CHOICE",
+  "options": ["Yes", "No", "Need sponsorship"],
+  "isRequired": true,
+  "isEliminatory": true,
+  "expectedAnswer": "Yes"
+}
+
+YES_NO:
+{
+  "questionText": "Are you willing to relocate?",
+  "questionType": "YES_NO",
+  "isRequired": true,
+  "isEliminatory": false
+}
+
+Response (201):
+{
+  "success": true,
+  "message": "Screening question added",
+  "data": {
+    "id": "cuid_q_1",
+    "jobId": "cuid_job_123",
+    "questionText": "How many years of React experience?",
+    "questionType": "NUMERIC",
+    "options": null,
+    "isRequired": true,
+    "isEliminatory": true,
+    "expectedAnswer": 3,
+    "orderIndex": 0,
+    "createdAt": "2026-02-07T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+2.2 UPDATE SCREENING QUESTION
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/screening-question/:questionId
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Update a screening question's properties.
+
+Request Body (all fields optional):
+{
+  "questionText": "How many years of React experience do you have? (minimum 3)",
+  "isEliminatory": true,
+  "expectedAnswer": 3
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Screening question updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+2.3 REORDER SCREENING QUESTIONS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/screening-questions/reorder
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Reorder screening questions (for drag-and-drop UI).
+
+Request Body:
+{
+  "orderedIds": ["cuid_q_3", "cuid_q_1", "cuid_q_2"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Questions reordered successfully",
+  "data": {
+    "message": "Questions reordered successfully"
+  }
+}
+
+--------------------------------------------------------------------------------
+2.4 DELETE SCREENING QUESTION
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/job/screening-question/:questionId
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Delete a screening question. Remaining questions are re-indexed.
+
+Response (200):
+{
+  "success": true,
+  "message": "Question deleted successfully",
+  "data": {
+    "message": "Question deleted successfully"
+  }
+}
+
+================================================================================
+3. EMPLOYER: APPLICATION PIPELINE
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 GET APPLICATIONS FOR A JOB
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/applications
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: List all applications for a job with filtering and pagination.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string): "appliedAt" (default), "matchScore"
+- order ("asc" | "desc", default: "desc")
+- status (enum): Filter by application status
+- minScore (number): Minimum match score
+- source (string): Filter by source (DIRECT, REFERRAL, SEARCH, etc.)
+- search (string): Search by applicant name or email
+
+Example: ?status=APPLIED&sortBy=matchScore&minScore=70
+
+Response (200):
+{
+  "success": true,
+  "message": "Applications fetched",
+  "data": {
+    "applications": [
+      {
+        "id": "cuid_app_1",
+        "jobId": "cuid_job_123",
+        "userId": "cuid_user_789",
+        "status": "APPLIED",
+        "matchScore": 85,
+        "screeningScore": 100,
+        "source": "DIRECT",
+        "appliedAt": "2026-02-07T14:00:00.000Z",
+        "reviewedAt": null,
+        "user": {
+          "id": "cuid_user_789",
+          "firstName": "Alex",
+          "lastName": "Chen",
+          "username": "alexchen",
+          "profilePhoto": "https://...",
+          "headline": "Senior Developer at StartupXYZ",
+          "email": "alex@example.com"
+        },
+        "referral": null,
+        "_count": {
+          "applicationNotes": 0,
+          "ratings": 0
+        }
+      }
+    ],
+    "total": 45,
+    "page": 1,
+    "limit": 20
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 GET APPLICATION DETAIL (EMPLOYER VIEW)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/application/:applicationId
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Get full application detail including applicant profile,
+screening answers, timeline, notes, and ratings.
+
+Response (200):
+{
+  "success": true,
+  "message": "Application detail fetched",
+  "data": {
+    "id": "cuid_app_1",
+    "status": "SCREENING",
+    "matchScore": 85,
+    "screeningScore": 100,
+    "source": "REFERRAL",
+    "resumeUrl": "https://...",
+    "coverLetter": "I am excited to apply...",
+    "portfolioUrl": "https://portfolio.example.com",
+    "expectedSalary": 180000,
+    "noticePeriod": "2 weeks",
+    "currentlyEmployed": true,
+    "appliedAt": "2026-02-07T14:00:00.000Z",
+    "reviewedAt": "2026-02-08T10:00:00.000Z",
+    "job": {
+      "id": "cuid_job_123",
+      "pageId": "cuid_page_123",
+      "title": "Senior Full Stack Developer"
+    },
+    "user": {
+      "id": "cuid_user_789",
+      "firstName": "Alex",
+      "lastName": "Chen",
+      "headline": "Senior Developer at StartupXYZ",
+      "bio": "Passionate developer with 7 years...",
+      "email": "alex@example.com",
+      "phone": "+1234567890",
+      "location": { "city": "San Francisco", "state": "CA", "country": "US" },
+      "skills": [
+        { "skill": { "name": "React" }, "proficiency": "EXPERT", "yearsUsed": 5 }
+      ],
+      "experiences": [
+        { "company": "StartupXYZ", "title": "Senior Developer", "startDate": "2022-01-01", "endDate": null }
+      ],
+      "educations": [ ... ],
+      "certifications": [ ... ],
+      "projects": [ ... ],
+      "socialLinks": [ ... ]
+    },
+    "screeningAnswers": [
+      {
+        "id": "cuid_sa_1",
+        "answer": 5,
+        "question": {
+          "questionText": "How many years of React experience?",
+          "questionType": "NUMERIC",
+          "isRequired": true,
+          "isEliminatory": true,
+          "expectedAnswer": 3
+        }
+      }
+    ],
+    "timeline": [
+      {
+        "id": "cuid_tl_1",
+        "fromStatus": null,
+        "toStatus": "APPLIED",
+        "note": "Application submitted",
+        "changedBy": { "firstName": "Alex", "lastName": "Chen" },
+        "createdAt": "2026-02-07T14:00:00.000Z"
+      },
+      {
+        "id": "cuid_tl_2",
+        "fromStatus": "APPLIED",
+        "toStatus": "SCREENING",
+        "note": "Moved to screening",
+        "changedBy": { "firstName": "Jane", "lastName": "Smith" },
+        "createdAt": "2026-02-08T10:00:00.000Z"
+      }
+    ],
+    "applicationNotes": [
+      {
+        "id": "cuid_note_1",
+        "content": "Strong technical background, good culture fit",
+        "isPrivate": false,
+        "author": { "firstName": "Jane", "lastName": "Smith", "profilePhoto": "..." },
+        "createdAt": "2026-02-08T11:00:00.000Z"
+      }
+    ],
+    "ratings": [
+      {
+        "id": "cuid_rating_1",
+        "score": 4,
+        "comment": "Great technical skills",
+        "rater": { "firstName": "Jane", "lastName": "Smith", "profilePhoto": "..." }
+      }
+    ],
+    "referral": {
+      "id": "cuid_ref_1",
+      "note": "Worked together at previous company",
+      "referrer": { "firstName": "Mike", "lastName": "Johnson", "profilePhoto": "..." }
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.3 CHANGE APPLICATION STATUS
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/application/:applicationId/status
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Move an application to a new status. Sends email to applicant.
+
+Request Body:
+{
+  "status": "INTERVIEWING",
+  "note": "We'd like to schedule an interview with you next week"
+}
+
+Field Details:
+- status (enum, required): Target status
+- note (string, optional): Message for the applicant (included in email)
+
+Response (200):
+{
+  "success": true,
+  "message": "Application status updated",
+  "data": {
+    "id": "cuid_app_1",
+    "status": "INTERVIEWING",
+    "reviewedAt": "2026-02-08T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 BULK STATUS CHANGE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/applications/bulk-status
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Change status for multiple applications at once.
+
+Request Body:
+{
+  "applicationIds": ["cuid_app_1", "cuid_app_2", "cuid_app_3"],
+  "status": "REJECTED",
+  "note": "Thank you for your interest, but we've decided to move forward with other candidates"
+}
+
+Field Details:
+- applicationIds (string[], required): Array of application IDs (min 1)
+- status (enum, required): Target status
+- note (string, optional): Note for all applications
+
+Response (200):
+{
+  "success": true,
+  "message": "Bulk status update completed",
+  "data": {
+    "updated": 3
+  }
+}
+
+--------------------------------------------------------------------------------
+3.5 ADD APPLICATION NOTE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/application/:applicationId/note
+Auth: User Token Required (any page member)
+
+Purpose: Add an internal note to an application for team collaboration.
+
+Request Body:
+{
+  "content": "Excellent coding test results. Recommend fast-tracking to interview.",
+  "isPrivate": false
+}
+
+Field Details:
+- content (string, required): Note content, max 2000 chars
+- isPrivate (boolean, optional): If true, only visible to author (default: false)
+
+Response (201):
+{
+  "success": true,
+  "message": "Note added",
+  "data": {
+    "id": "cuid_note_1",
+    "applicationId": "cuid_app_1",
+    "authorId": "cuid_user_456",
+    "content": "Excellent coding test results...",
+    "isPrivate": false,
+    "author": {
+      "firstName": "Jane",
+      "lastName": "Smith",
+      "profilePhoto": "https://..."
+    },
+    "createdAt": "2026-02-08T11:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.6 RATE APPLICATION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/application/:applicationId/rate
+Auth: User Token Required (any page member)
+
+Purpose: Rate an application 1-5 stars. If you've already rated, your
+rating is updated (upsert behavior).
+
+Request Body:
+{
+  "score": 4,
+  "comment": "Strong technical skills, good communication"
+}
+
+Field Details:
+- score (number, required): Rating from 1 to 5
+- comment (string, optional): Rating comment, max 1000 chars
+
+Response (200):
+{
+  "success": true,
+  "message": "Rating saved",
+  "data": {
+    "id": "cuid_rating_1",
+    "applicationId": "cuid_app_1",
+    "raterId": "cuid_user_456",
+    "score": 4,
+    "comment": "Strong technical skills, good communication",
+    "rater": {
+      "firstName": "Jane",
+      "lastName": "Smith",
+      "profilePhoto": "https://..."
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+3.7 GET APPLICANT PROFILE
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/applicant/:applicantId/profile
+Auth: User Token Required (must be a member of a page the applicant applied to)
+
+Purpose: View full profile of an applicant who has applied to your page's jobs.
+
+Response (200):
+{
+  "success": true,
+  "message": "Applicant profile fetched",
+  "data": {
+    "id": "cuid_user_789",
+    "firstName": "Alex",
+    "lastName": "Chen",
+    "username": "alexchen",
+    "profilePhoto": "https://...",
+    "coverImage": "https://...",
+    "headline": "Senior Developer at StartupXYZ",
+    "bio": "...",
+    "email": "alex@example.com",
+    "phone": "+1234567890",
+    "location": { ... },
+    "socialLinks": [ ... ],
+    "skills": [ ... ],
+    "experiences": [ ... ],
+    "educations": [ ... ],
+    "certifications": [ ... ],
+    "projects": [ ... ]
+  }
+}
+
+--------------------------------------------------------------------------------
+3.8 EXPORT APPLICATIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/applications/export
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: Export all application data for a job in a structured format.
+
+Query Parameters:
+- status (enum, optional): Filter by application status
+
+Response (200):
+{
+  "success": true,
+  "message": "Applications exported",
+  "data": {
+    "jobTitle": "Senior Full Stack Developer",
+    "exportedAt": "2026-02-08T12:00:00.000Z",
+    "total": 45,
+    "applications": [
+      {
+        "applicantName": "Alex Chen",
+        "email": "alex@example.com",
+        "phone": "+1234567890",
+        "headline": "Senior Developer at StartupXYZ",
+        "location": "San Francisco, CA, US",
+        "status": "SCREENING",
+        "matchScore": 85,
+        "screeningScore": 100,
+        "source": "DIRECT",
+        "appliedAt": "2026-02-07T14:00:00.000Z",
+        "resumeUrl": "https://...",
+        "portfolioUrl": "https://...",
+        "coverLetter": "...",
+        "expectedSalary": 180000,
+        "noticePeriod": "2 weeks",
+        "currentlyEmployed": true,
+        "averageRating": "4.0",
+        "screeningAnswers": [
+          { "question": "How many years of React experience?", "answer": 5 }
+        ]
+      }
+    ]
+  }
+}
+
+================================================================================
+4. EMPLOYER: REFERRALS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 GET REFERRALS FOR A JOB
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/referrals
+Auth: User Token Required (OWNER or ADMIN of the page)
+
+Purpose: View all referrals submitted for a specific job.
+
+Response (200):
+{
+  "success": true,
+  "message": "Referrals fetched",
+  "data": [
+    {
+      "id": "cuid_ref_1",
+      "jobId": "cuid_job_123",
+      "referredEmail": "candidate@example.com",
+      "note": "Worked together at previous company, excellent developer",
+      "status": "APPLIED",
+      "referrer": {
+        "firstName": "Mike",
+        "lastName": "Johnson",
+        "profilePhoto": "https://...",
+        "headline": "Engineering Lead"
+      },
+      "referredUser": {
+        "firstName": "Alex",
+        "lastName": "Chen",
+        "profilePhoto": "https://...",
+        "headline": "Senior Developer"
+      },
+      "applications": [
+        { "id": "cuid_app_1", "status": "SCREENING", "matchScore": 85 }
+      ],
+      "createdAt": "2026-02-06T10:00:00.000Z"
+    }
+  ]
+}
+
+================================================================================
+5. APPLICANT: JOB DISCOVERY
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 DISCOVER JOBS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/discover
+Auth: Optional (logged-in users see bookmark/applied status)
+
+Purpose: Search and filter jobs with 15+ filters. Main job search endpoint.
+
+Query Parameters:
+- search (string): Search in title, description, skills, department
+- jobType (string | string[]): FULL_TIME | PART_TIME | CONTRACT | INTERNSHIP | FREELANCE | TEMPORARY | VOLUNTEER
+- workMode (string | string[]): REMOTE | ONSITE | HYBRID
+- experienceLevel (string | string[]): ENTRY | JUNIOR | MID | SENIOR | LEAD | EXECUTIVE
+- location (string): Filter by location text
+- salaryMin (number): Minimum salary range
+- salaryMax (number): Maximum salary range
+- skills (string | string[]): Filter by skill names
+- industry (string): Filter by industry
+- categoryId (string): Filter by category ID
+- postedWithin (string): "24h" | "7d" | "30d" | "90d"
+- isRemote (boolean): Only remote jobs
+- pageType (string | string[]): STARTUP | COMPANY | VC_FIRM | etc.
+- sortBy (string): "relevance" | "date" | "salary_high" | "salary_low"
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+
+Example: ?search=react&workMode=REMOTE&experienceLevel=SENIOR&postedWithin=7d&sortBy=salary_high
+
+Response (200):
+{
+  "success": true,
+  "message": "Jobs discovered",
+  "data": {
+    "jobs": [
+      {
+        "id": "cuid_job_123",
+        "title": "Senior Full Stack Developer",
+        "slug": "senior-full-stack-developer",
+        "description": "...",
+        "jobType": "FULL_TIME",
+        "workMode": "HYBRID",
+        "experienceLevel": "SENIOR",
+        "location": "San Francisco, CA",
+        "salaryMin": 150000,
+        "salaryMax": 200000,
+        "currency": "USD",
+        "salaryPeriod": "YEARLY",
+        "showSalary": true,
+        "skills": ["JavaScript", "React", "Node.js"],
+        "isRemote": false,
+        "deadline": "2026-03-15T00:00:00.000Z",
+        "page": {
+          "id": "cuid_page_123",
+          "name": "TechCorp",
+          "slug": "techcorp",
+          "logo": "https://...",
+          "type": "COMPANY",
+          "teamSize": "50-100",
+          "sector": "Technology"
+        },
+        "category": { "id": "...", "name": "Software Engineering", "slug": "..." },
+        "_count": { "applications": 45, "bookmarks": 12 },
+        "applicantRange": "10-50",
+        "isBookmarked": false,
+        "hasApplied": false
+      }
+    ],
+    "total": 128,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+Notes:
+- "applicantRange" shows anonymized count: "No applicants yet", "1-10", "10-50", "50-100", "100-200", "200+"
+- "isBookmarked" and "hasApplied" only present for authenticated users
+- Only OPEN jobs with valid deadlines are returned
+
+--------------------------------------------------------------------------------
+5.2 GET RECOMMENDED JOBS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/recommended
+Auth: User Token Required
+
+Purpose: Get AI-recommended jobs based on user's profile (skills, experience,
+education, location). Jobs are scored using the match algorithm and sorted
+by match score descending.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+
+Response (200):
+{
+  "success": true,
+  "message": "Recommended jobs fetched",
+  "data": {
+    "jobs": [
+      {
+        "id": "cuid_job_123",
+        "title": "Senior Full Stack Developer",
+        "matchScore": 92,
+        "matchBreakdown": {
+          "skills": { "score": 40, "matched": 3, "total": 3 },
+          "bonusSkills": { "score": 7, "matched": 2, "total": 3 },
+          "experience": { "score": 20, "userLevel": "SENIOR", "requiredLevel": "SENIOR" },
+          "workMode": { "score": 10, "note": "Remote job" },
+          "education": { "score": 10, "note": "Education meets requirements" }
+        },
+        "applicantRange": "10-50",
+        "isBookmarked": true,
+        "hasApplied": false,
+        "page": { ... },
+        ...
+      }
+    ],
+    "total": 50,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+--------------------------------------------------------------------------------
+5.3 GET TRENDING JOBS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/trending
+Auth: Optional
+
+Purpose: Get trending jobs from the last 7 days, sorted by views and applications.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+
+Response (200):
+{
+  "success": true,
+  "message": "Trending jobs fetched",
+  "data": {
+    "jobs": [ ... ],
+    "total": 25,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+--------------------------------------------------------------------------------
+5.4 GET BOOKMARKED JOBS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/bookmarked
+Auth: User Token Required
+
+Purpose: Get user's bookmarked/saved jobs.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+
+Response (200):
+{
+  "success": true,
+  "message": "Bookmarked jobs fetched",
+  "data": {
+    "jobs": [
+      {
+        "id": "cuid_job_123",
+        "title": "Senior Full Stack Developer",
+        "status": "OPEN",
+        "page": { ... },
+        "category": { ... },
+        "_count": { "applications": 45 },
+        "bookmarkedAt": "2026-02-06T10:00:00.000Z",
+        "isAvailable": true
+      }
+    ],
+    "total": 8,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+Note: "isAvailable" indicates if the job is still OPEN and within deadline.
+
+--------------------------------------------------------------------------------
+5.5 GET JOBS BY SKILL
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/by-skill/:skillName
+Auth: Optional
+
+Purpose: Find all open jobs that require or mention a specific skill.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+
+Example: /api/ecosystem/job/by-skill/React
+
+Response (200):
+{
+  "success": true,
+  "message": "Jobs by skill fetched",
+  "data": {
+    "jobs": [ ... ],
+    "total": 34,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+--------------------------------------------------------------------------------
+5.6 GET JOB BY SLUG (JOB DETAIL PAGE)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:slug
+Auth: Optional (logged-in users see match score, bookmark, application status)
+
+Purpose: Get full job detail for the applicant-facing job page.
+Automatically tracks view count and creates a view record.
+
+Query Parameters:
+- source (string, optional): Where the user came from (e.g., "search", "email", "direct")
+
+Response (200):
+{
+  "success": true,
+  "message": "Job fetched",
+  "data": {
+    "id": "cuid_job_123",
+    "title": "Senior Full Stack Developer",
+    "slug": "senior-full-stack-developer",
+    "description": "...",
+    "requirements": "...",
+    "responsibilities": "...",
+    "benefits": "...",
+    "jobType": "FULL_TIME",
+    "workMode": "HYBRID",
+    "experienceLevel": "SENIOR",
+    "location": "San Francisco, CA",
+    "salaryMin": 150000,
+    "salaryMax": 200000,
+    "currency": "USD",
+    "salaryPeriod": "YEARLY",
+    "showSalary": true,
+    "skills": ["JavaScript", "React", "Node.js"],
+    "requiredSkills": ["React", "Node.js", "PostgreSQL"],
+    "niceToHaveSkills": ["AWS", "Docker", "GraphQL"],
+    "isRemote": false,
+    "deadline": "2026-03-15T00:00:00.000Z",
+    "department": "Engineering",
+    "industry": "Technology",
+    "numberOfOpenings": 2,
+    "educationLevel": "Bachelor's Degree",
+    "page": {
+      "id": "cuid_page_123",
+      "name": "TechCorp",
+      "slug": "techcorp",
+      "logo": "https://...",
+      "type": "COMPANY",
+      "teamSize": "50-100",
+      "sector": "Technology",
+      "description": "Leading tech company...",
+      "website": "https://techcorp.com",
+      "headquarters": "San Francisco, CA",
+      "followerCount": 1500
+    },
+    "category": { "id": "...", "name": "Software Engineering", "parent": { ... } },
+    "hiringManager": { "id": "...", "firstName": "Jane", ... },
+    "postedBy": { "id": "...", "firstName": "Jane", ... },
+    "_count": { "applications": 45, "bookmarks": 12, "screeningQuestions": 3 },
+    "applicantRange": "10-50",
+    "screeningQuestionCount": 3,
+    "hasApplied": false,
+    "applicationStatus": null,
+    "isBookmarked": true,
+    "matchScore": 85,
+    "matchBreakdown": {
+      "skills": { "score": 35, "matched": 2, "total": 3 },
+      "experience": { "score": 20, "userLevel": "SENIOR", "requiredLevel": "SENIOR" },
+      "workMode": { "score": 10, "userLocation": "San Francisco", "jobLocation": "San Francisco, CA" },
+      "education": { "score": 10, "note": "Education meets requirements" },
+      "bonusSkills": { "score": 7, "matched": 2, "total": 3 }
+    },
+    "connectionsAtCompany": [
+      { "id": "...", "firstName": "Sarah", "lastName": "Kim", "profilePhoto": "...", "headline": "..." }
+    ],
+    "similarJobs": [
+      { "id": "...", "title": "Full Stack Engineer", "slug": "...", "page": { ... }, ... }
+    ]
+  }
+}
+
+Notes:
+- DRAFT jobs return 404
+- matchScore, matchBreakdown, isBookmarked, hasApplied, connectionsAtCompany only for authenticated users
+- View is tracked on each request (viewerId recorded if authenticated)
+
+--------------------------------------------------------------------------------
+5.7 GET SIMILAR JOBS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/similar
+Auth: Optional
+
+Purpose: Get jobs similar to a given job based on skills, category, experience level.
+
+Query Parameters:
+- limit (number, default: 10, max: 20)
+
+Response (200):
+{
+  "success": true,
+  "message": "Similar jobs fetched",
+  "data": [ ... ]
+}
+
+--------------------------------------------------------------------------------
+5.8 GET CONNECTIONS AT COMPANY
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/connections
+Auth: User Token Required
+
+Purpose: Find your connections who are members of the company posting this job.
+
+Response (200):
+{
+  "success": true,
+  "message": "Connections fetched",
+  "data": [
+    {
+      "id": "cuid_user_555",
+      "firstName": "Sarah",
+      "lastName": "Kim",
+      "profilePhoto": "https://...",
+      "headline": "Product Manager",
+      "roleAtCompany": "ADMIN"
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+5.9 GET SKILL GAP ANALYSIS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/skill-gap
+Auth: User Token Required
+
+Purpose: Compare your skills against job requirements. Shows matched/missing
+skills and provides a readiness percentage.
+
+Response (200):
+{
+  "success": true,
+  "message": "Skill gap analysis",
+  "data": {
+    "jobTitle": "Senior Full Stack Developer",
+    "readinessPercentage": 67,
+    "required": {
+      "matched": [
+        { "skill": "React", "name": "React", "proficiency": "EXPERT", "yearsUsed": 5 },
+        { "skill": "Node.js", "name": "Node.js", "proficiency": "ADVANCED", "yearsUsed": 4 }
+      ],
+      "missing": ["PostgreSQL"],
+      "total": 3
+    },
+    "niceToHave": {
+      "matched": [
+        { "skill": "AWS", "name": "AWS", "proficiency": "INTERMEDIATE", "yearsUsed": 2 }
+      ],
+      "missing": ["Docker", "GraphQL"],
+      "total": 3
+    },
+    "prioritizedLearning": ["PostgreSQL"]
+  }
+}
+
+================================================================================
+6. APPLICANT: APPLICATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 APPLY FOR A JOB
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/apply
+Auth: User Token Required
+
+Purpose: Submit a job application. Validates all requirements, computes
+match score, processes referrals, sends email notifications.
+
+Request Body:
+{
+  "resumeUrl": "https://bucket.s3.amazonaws.com/resumes/alex-resume.pdf",
+  "coverLetter": "Dear Hiring Manager, I am excited to apply for the Senior Full Stack Developer position...",
+  "portfolioUrl": "https://alexchen.dev",
+  "expectedSalary": 180000,
+  "noticePeriod": "2 weeks",
+  "currentlyEmployed": true,
+  "source": "SEARCH",
+  "screeningAnswers": [
+    { "questionId": "cuid_q_1", "answer": 5 },
+    { "questionId": "cuid_q_2", "answer": "Yes" },
+    { "questionId": "cuid_q_3", "answer": "I am passionate about building scalable systems..." }
+  ]
+}
+
+Field Details:
+- resumeUrl (string, optional): URL to uploaded resume
+- coverLetter (string, optional): Cover letter text, max 5000 chars
+- portfolioUrl (string, optional): Portfolio URL
+- expectedSalary (number, optional): Expected salary
+- noticePeriod (string, optional): Notice period at current job
+- currentlyEmployed (boolean, optional): Whether currently employed
+- source (string, optional): How they found the job
+- screeningAnswers (array, optional): Answers to screening questions
+  - questionId (string, required): ID of the screening question
+  - answer (any, required): Answer value
+
+Validation Checks:
+- Job must be OPEN
+- Deadline must not have passed
+- Application limit must not be reached
+- User must not have already applied
+- All required screening questions must be answered
+
+Side Effects:
+- Match score computed from user profile
+- Screening answers auto-scored for eliminatory questions
+- If user was referred, referral status updated to APPLIED
+- Application timeline entry created
+- Confirmation email sent to applicant
+- Notification email sent to hiring manager
+
+Response (201):
+{
+  "success": true,
+  "message": "Application submitted",
+  "data": {
+    "id": "cuid_app_1",
+    "jobId": "cuid_job_123",
+    "userId": "cuid_user_789",
+    "status": "APPLIED",
+    "matchScore": 85,
+    "source": "SEARCH",
+    "appliedAt": "2026-02-07T14:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+6.2 WITHDRAW APPLICATION
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/application/:applicationId/withdraw
+Auth: User Token Required
+
+Purpose: Withdraw your own application. Cannot withdraw if already
+HIRED, REJECTED, or WITHDRAWN.
+
+Response (200):
+{
+  "success": true,
+  "message": "Application withdrawn successfully",
+  "data": {
+    "message": "Application withdrawn successfully"
+  }
+}
+
+--------------------------------------------------------------------------------
+6.3 GET MY APPLICATIONS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/my-applications
+Auth: User Token Required
+
+Purpose: List all your job applications with job details.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "appliedAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): Filter by application status
+
+Response (200):
+{
+  "success": true,
+  "message": "My applications fetched",
+  "data": {
+    "applications": [
+      {
+        "id": "cuid_app_1",
+        "status": "SCREENING",
+        "matchScore": 85,
+        "appliedAt": "2026-02-07T14:00:00.000Z",
+        "reviewedAt": "2026-02-08T10:00:00.000Z",
+        "job": {
+          "id": "cuid_job_123",
+          "title": "Senior Full Stack Developer",
+          "slug": "senior-full-stack-developer",
+          "jobType": "FULL_TIME",
+          "workMode": "HYBRID",
+          "experienceLevel": "SENIOR",
+          "location": "San Francisco, CA",
+          "status": "OPEN",
+          "salaryMin": 150000,
+          "salaryMax": 200000,
+          "currency": "USD",
+          "salaryPeriod": "YEARLY",
+          "showSalary": true,
+          "page": { "id": "...", "name": "TechCorp", "slug": "techcorp", "logo": "...", "type": "COMPANY" }
+        },
+        "_count": { "timeline": 2 }
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 20
+  }
+}
+
+--------------------------------------------------------------------------------
+6.4 GET APPLICATION DETAIL (APPLICANT VIEW)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/my-applications/:applicationId
+Auth: User Token Required
+
+Purpose: Get full detail of your own application including screening answers
+and timeline. Can only view your own applications.
+
+Response (200):
+{
+  "success": true,
+  "message": "Application detail",
+  "data": {
+    "id": "cuid_app_1",
+    "status": "SCREENING",
+    "matchScore": 85,
+    "resumeUrl": "https://...",
+    "coverLetter": "...",
+    "portfolioUrl": "https://...",
+    "expectedSalary": 180000,
+    "noticePeriod": "2 weeks",
+    "currentlyEmployed": true,
+    "appliedAt": "2026-02-07T14:00:00.000Z",
+    "job": {
+      "id": "cuid_job_123",
+      "title": "Senior Full Stack Developer",
+      "slug": "...",
+      "page": { ... }
+    },
+    "screeningAnswers": [
+      {
+        "id": "cuid_sa_1",
+        "answer": 5,
+        "question": { "questionText": "How many years of React?", "questionType": "NUMERIC" }
+      }
+    ],
+    "timeline": [
+      {
+        "fromStatus": null,
+        "toStatus": "APPLIED",
+        "note": "Application submitted",
+        "createdAt": "2026-02-07T14:00:00.000Z"
+      },
+      {
+        "fromStatus": "APPLIED",
+        "toStatus": "SCREENING",
+        "note": "Moved to screening",
+        "createdAt": "2026-02-08T10:00:00.000Z"
+      }
+    ]
+  }
+}
+
+--------------------------------------------------------------------------------
+6.5 GET APPLICATION INSIGHTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/my-applications/:applicationId/insights
+Auth: User Token Required
+
+Purpose: Get anonymized comparison stats for your application. Shows how
+you compare to other applicants without revealing identities.
+
+Response (200):
+{
+  "success": true,
+  "message": "Application insights",
+  "data": {
+    "yourMatchScore": 85,
+    "averageMatchScore": 72,
+    "totalApplicants": 45,
+    "statusBreakdown": [
+      { "status": "APPLIED", "count": 20 },
+      { "status": "SCREENING", "count": 10 },
+      { "status": "INTERVIEWING", "count": 8 },
+      { "status": "OFFERED", "count": 3 },
+      { "status": "HIRED", "count": 2 },
+      { "status": "REJECTED", "count": 2 }
+    ],
+    "daysSinceApplied": 5,
+    "responseTime": 1,
+    "currentStatus": "SCREENING"
+  }
+}
+
+Notes:
+- responseTime is days between application and first status change (null if no change yet)
+- All data is anonymized - no individual applicant data is exposed
+
+================================================================================
+7. APPLICANT: BOOKMARKS
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 TOGGLE BOOKMARK
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/bookmark
+Auth: User Token Required
+
+Purpose: Add or remove a bookmark. If already bookmarked, removes it.
+If not bookmarked, adds it. Cannot bookmark DRAFT jobs.
+
+Response (200):
+{
+  "success": true,
+  "message": "Bookmark toggled",
+  "data": {
+    "bookmarked": true
+  }
+}
+
+Or when un-bookmarking:
+{
+  "success": true,
+  "message": "Bookmark toggled",
+  "data": {
+    "bookmarked": false
+  }
+}
+
+================================================================================
+8. APPLICANT: JOB ALERTS
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 CREATE ALERT
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/alert
+Auth: User Token Required
+
+Purpose: Create a job alert that sends email notifications when new jobs
+match your criteria. At least one search criterion is required.
+
+Request Body:
+{
+  "name": "React Remote Jobs",
+  "keywords": ["react", "frontend"],
+  "jobTypes": ["FULL_TIME", "CONTRACT"],
+  "workModes": ["REMOTE"],
+  "experienceLevels": ["SENIOR", "LEAD"],
+  "locations": ["San Francisco", "New York"],
+  "skills": ["React", "TypeScript"],
+  "salaryMin": 120000,
+  "salaryMax": 250000,
+  "industries": ["Technology"],
+  "categories": [],
+  "isRemoteOnly": true,
+  "frequency": "DAILY"
+}
+
+Field Details:
+- name (string, optional): Alert name (default: "Job Alert"), max 100 chars
+- keywords (string[], optional): Search keywords
+- jobTypes (string[], optional): Job type filters
+- workModes (string[], optional): Work mode filters
+- experienceLevels (string[], optional): Experience level filters
+- locations (string[], optional): Location filters
+- skills (string[], optional): Skill filters
+- salaryMin (number, optional): Minimum salary
+- salaryMax (number, optional): Maximum salary
+- industries (string[], optional): Industry filters
+- categories (string[], optional): Category ID filters
+- isRemoteOnly (boolean, optional): Only remote jobs
+- frequency (enum, required): INSTANT | DAILY | WEEKLY
+
+Response (201):
+{
+  "success": true,
+  "message": "Alert created",
+  "data": {
+    "id": "cuid_alert_1",
+    "userId": "cuid_user_789",
+    "name": "React Remote Jobs",
+    "keywords": ["react", "frontend"],
+    "jobTypes": ["FULL_TIME", "CONTRACT"],
+    "workModes": ["REMOTE"],
+    "experienceLevels": ["SENIOR", "LEAD"],
+    "locations": ["San Francisco", "New York"],
+    "skills": ["React", "TypeScript"],
+    "salaryMin": 120000,
+    "salaryMax": 250000,
+    "industries": ["Technology"],
+    "categories": [],
+    "isRemoteOnly": true,
+    "frequency": "DAILY",
+    "isActive": true,
+    "lastTriggeredAt": null,
+    "createdAt": "2026-02-07T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+8.2 GET MY ALERTS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/alerts
+Auth: User Token Required
+
+Purpose: List all your job alerts.
+
+Response (200):
+{
+  "success": true,
+  "message": "Alerts fetched",
+  "data": [
+    {
+      "id": "cuid_alert_1",
+      "name": "React Remote Jobs",
+      "frequency": "DAILY",
+      "isActive": true,
+      "keywords": ["react", "frontend"],
+      "skills": ["React", "TypeScript"],
+      "workModes": ["REMOTE"],
+      "lastTriggeredAt": "2026-02-07T08:00:00.000Z",
+      "createdAt": "2026-02-06T10:00:00.000Z"
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+8.3 UPDATE ALERT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/alert/:alertId
+Auth: User Token Required
+
+Purpose: Update alert criteria. Can only update your own alerts.
+
+Request Body (all fields optional):
+{
+  "name": "React Remote Jobs - Updated",
+  "frequency": "WEEKLY",
+  "skills": ["React", "TypeScript", "Next.js"]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Alert updated",
+  "data": { ... }
+}
+
+--------------------------------------------------------------------------------
+8.4 DELETE ALERT
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/job/alert/:alertId
+Auth: User Token Required
+
+Purpose: Delete a job alert. Can only delete your own alerts.
+
+Response (200):
+{
+  "success": true,
+  "message": "Alert deleted successfully",
+  "data": {
+    "message": "Alert deleted successfully"
+  }
+}
+
+--------------------------------------------------------------------------------
+8.5 TOGGLE ALERT
+--------------------------------------------------------------------------------
+Method: PATCH
+URL: {{BASE_URL}}/api/ecosystem/job/alert/:alertId/toggle
+Auth: User Token Required
+
+Purpose: Enable or disable an alert without deleting it.
+
+Response (200):
+{
+  "success": true,
+  "message": "Alert toggled",
+  "data": {
+    "id": "cuid_alert_1",
+    "isActive": false,
+    ...
+  }
+}
+
+================================================================================
+9. APPLICANT: REFERRALS
+================================================================================
+
+--------------------------------------------------------------------------------
+9.1 REFER A CANDIDATE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/job/:jobId/refer-candidate
+Auth: User Token Required (must be a member of the job's page)
+
+Purpose: Refer someone for a job by email. Only page members can refer.
+Sends an email invitation to the referred person.
+
+Request Body:
+{
+  "referredEmail": "candidate@example.com",
+  "note": "I worked with this person at my previous company. Excellent developer."
+}
+
+Field Details:
+- referredEmail (string, required): Email of the person being referred
+- note (string, optional): Referral note, max 1000 chars
+
+Validations:
+- You cannot refer yourself
+- One referral per email per job (no duplicates)
+- Job must be OPEN
+- You must be a member of the page posting the job
+
+Side Effects:
+- Referral email sent to the referred person
+- If referred person applies later, referral is linked automatically
+
+Response (201):
+{
+  "success": true,
+  "message": "Referral submitted",
+  "data": {
+    "id": "cuid_ref_1",
+    "jobId": "cuid_job_123",
+    "referrerId": "cuid_user_789",
+    "referredEmail": "candidate@example.com",
+    "referredUserId": null,
+    "note": "I worked with this person...",
+    "status": "PENDING",
+    "referrer": { "firstName": "Mike", "lastName": "Johnson" },
+    "job": { "title": "Senior Full Stack Developer", "slug": "..." },
+    "createdAt": "2026-02-07T10:00:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+9.2 GET MY REFERRALS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/job/my-referrals
+Auth: User Token Required
+
+Purpose: List all referrals you've made across all jobs.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 12, max: 50)
+
+Response (200):
+{
+  "success": true,
+  "message": "My referrals fetched",
+  "data": {
+    "referrals": [
+      {
+        "id": "cuid_ref_1",
+        "referredEmail": "candidate@example.com",
+        "note": "I worked with this person...",
+        "status": "APPLIED",
+        "job": {
+          "id": "cuid_job_123",
+          "title": "Senior Full Stack Developer",
+          "slug": "...",
+          "status": "OPEN",
+          "page": { "name": "TechCorp", "logo": "..." }
+        },
+        "referredUser": {
+          "firstName": "Alex",
+          "lastName": "Chen",
+          "profilePhoto": "..."
+        },
+        "createdAt": "2026-02-06T10:00:00.000Z"
+      }
+    ],
+    "total": 3,
+    "page": 1,
+    "limit": 12
+  }
+}
+
+================================================================================
+CRON JOBS (AUTOMATED BACKGROUND TASKS)
+================================================================================
+
+The following jobs run automatically:
+
+1. AUTO-CLOSE EXPIRED JOBS (Hourly)
+   - Closes jobs whose deadline has passed
+   - Sets status to CLOSED
+   - Withdraws active applications
+
+2. PROCESS INSTANT ALERTS (Every 30 minutes)
+   - Finds new jobs matching INSTANT alert criteria
+   - Sends email digest to alert owners
+
+3. PROCESS DAILY ALERTS (Daily at 8:00 AM)
+   - Finds new jobs since last trigger
+   - Sends email digest to DAILY alert owners
+
+4. PROCESS WEEKLY ALERTS (Monday at 8:00 AM)
+   - Finds new jobs since last trigger
+   - Sends email digest to WEEKLY alert owners
+
+5. JOB DEADLINE REMINDER (Daily at 9:00 AM)
+   - Finds jobs with deadlines in next 24 hours
+   - Sends email reminder to hiring managers
+
+6. EXPIRE STALE REFERRALS (Daily at midnight)
+   - Marks PENDING referrals older than 60 days as EXPIRED
+
+================================================================================
+EMAIL NOTIFICATIONS
+================================================================================
+
+The system sends the following emails automatically:
+
+1. Application Confirmation (to applicant)
+   - Sent when applicant applies for a job
+   - Includes job title, company name, match score
+
+2. Application Status Update (to applicant)
+   - Sent when employer changes application status
+   - Color-coded header (green for offer/hired, red for rejected, orange for screening/interviewing)
+   - Includes optional note from employer
+
+3. New Application Notification (to hiring manager)
+   - Sent when someone applies for a job
+   - Includes applicant name, match score, screening score
+
+4. Referral Invitation (to referred person)
+   - Sent when a page member refers someone
+   - Includes referrer name, company, job title, referral note
+
+5. Job Alert Digest (to alert owner)
+   - Sent based on alert frequency (instant/daily/weekly)
+   - Lists matching jobs with title, company, location, salary
+
+6. Job Deadline Reminder (to hiring manager)
+   - Sent 24 hours before application deadline
+   - Includes current application count
+
+================================================================================
+COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Employer Posts a Job and Hires
+--------------------------------------------------------------------------------
+
+Step 1: Create job in draft
+POST /api/ecosystem/job
+Body: {
+  "title": "Senior React Developer",
+  "description": "Join our growing team...",
+  "pageId": "cuid_page_123",
+  "jobType": "FULL_TIME",
+  "workMode": "REMOTE",
+  "experienceLevel": "SENIOR",
+  "salaryMin": 150000,
+  "salaryMax": 200000,
+  "requiredSkills": ["React", "TypeScript", "Node.js"],
+  "niceToHaveSkills": ["AWS", "Docker"],
+  "status": "DRAFT"
+}
+
+Step 2: Add screening questions
+POST /api/ecosystem/job/:jobId/screening-question
+Body: { "questionText": "Years of React experience?", "questionType": "NUMERIC", "isRequired": true, "isEliminatory": true, "expectedAnswer": 3 }
+POST /api/ecosystem/job/:jobId/screening-question
+Body: { "questionText": "Are you authorized to work in the US?", "questionType": "YES_NO", "isRequired": true, "isEliminatory": true, "expectedAnswer": true }
+
+Step 3: Publish job
+PATCH /api/ecosystem/job/:jobId/status
+Body: { "status": "OPEN" }
+
+Step 4: Check dashboard after a week
+GET /api/ecosystem/job/page/cuid_page_123/dashboard
+
+Step 5: Review applications sorted by match score
+GET /api/ecosystem/job/:jobId/applications?sortBy=matchScore
+
+Step 6: Move top candidates to screening
+POST /api/ecosystem/job/:jobId/applications/bulk-status
+Body: { "applicationIds": ["app1", "app2", "app3"], "status": "SCREENING" }
+
+Step 7: Review individual candidate
+GET /api/ecosystem/job/application/:applicationId
+POST /api/ecosystem/job/application/:applicationId/rate
+Body: { "score": 5, "comment": "Excellent technical background" }
+
+Step 8: Move to interviewing
+PATCH /api/ecosystem/job/application/:applicationId/status
+Body: { "status": "INTERVIEWING", "note": "We'll schedule a call next week" }
+
+Step 9: Make an offer
+PATCH /api/ecosystem/job/application/:applicationId/status
+Body: { "status": "OFFERED", "note": "Congratulations! Offer details coming via email." }
+
+Step 10: Hire and close
+PATCH /api/ecosystem/job/application/:applicationId/status
+Body: { "status": "HIRED" }
+PATCH /api/ecosystem/job/:jobId/status
+Body: { "status": "FILLED" }
+
+
+EXAMPLE 2: Applicant Job Search Journey
+--------------------------------------------------------------------------------
+
+Step 1: Browse recommended jobs
+GET /api/ecosystem/job/recommended
+
+Step 2: Search for specific jobs
+GET /api/ecosystem/job/discover?search=react&workMode=REMOTE&experienceLevel=SENIOR&salaryMin=150000
+
+Step 3: View job detail
+GET /api/ecosystem/job/senior-react-developer
+
+Step 4: Check skill gap
+GET /api/ecosystem/job/:jobId/skill-gap
+
+Step 5: Bookmark for later
+POST /api/ecosystem/job/:jobId/bookmark
+
+Step 6: Set up alert for similar jobs
+POST /api/ecosystem/job/alert
+Body: { "name": "React Remote Jobs", "skills": ["React", "TypeScript"], "workModes": ["REMOTE"], "experienceLevels": ["SENIOR"], "frequency": "DAILY" }
+
+Step 7: Apply for the job
+POST /api/ecosystem/job/:jobId/apply
+Body: { "resumeUrl": "https://...", "coverLetter": "...", "screeningAnswers": [...] }
+
+Step 8: Track application
+GET /api/ecosystem/job/my-applications
+GET /api/ecosystem/job/my-applications/:applicationId/insights
+
+
+EXAMPLE 3: Page Member Refers a Candidate
+--------------------------------------------------------------------------------
+
+Step 1: Refer candidate
+POST /api/ecosystem/job/:jobId/refer-candidate
+Body: { "referredEmail": "friend@example.com", "note": "Great developer, perfect for this role" }
+
+Step 2: Track referral status
+GET /api/ecosystem/job/my-referrals
+
+Step 3: (Referred person applies -> referral status auto-updates to APPLIED)
+
+Step 4: (Employer views referral on their end)
+GET /api/ecosystem/job/:jobId/referrals
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                        API TO USE
+--------------------------------------------------------------------------------
+"Search for jobs"                               GET /job/discover
+"Get job recommendations"                       GET /job/recommended
+"See trending jobs"                             GET /job/trending
+"Find jobs by skill"                            GET /job/by-skill/:skillName
+"View a job's details"                          GET /job/:slug
+"Get similar jobs"                              GET /job/:jobId/similar
+"Check my skills vs job requirements"           GET /job/:jobId/skill-gap
+"See my connections at the company"             GET /job/:jobId/connections
+"Apply for a job"                               POST /job/:jobId/apply
+"Withdraw my application"                       POST /job/application/:id/withdraw
+"See all my applications"                       GET /job/my-applications
+"Get application detail"                        GET /job/my-applications/:id
+"Compare myself to other applicants"            GET /job/my-applications/:id/insights
+"Bookmark/unbookmark a job"                     POST /job/:jobId/bookmark
+"See my bookmarked jobs"                        GET /job/bookmarked
+"Create a job alert"                            POST /job/alert
+"See my alerts"                                 GET /job/alerts
+"Update an alert"                               PATCH /job/alert/:id
+"Delete an alert"                               DELETE /job/alert/:id
+"Toggle an alert on/off"                        PATCH /job/alert/:id/toggle
+"Refer someone for a job"                       POST /job/:jobId/refer-candidate
+"See my referrals"                              GET /job/my-referrals
+"Post a new job (employer)"                     POST /job
+"Edit a job (employer)"                         PATCH /job/:jobId
+"Change job status (employer)"                  PATCH /job/:jobId/status
+"Duplicate a job (employer)"                    POST /job/:jobId/duplicate
+"Close/delete a job (employer)"                 DELETE /job/:jobId
+"See page's jobs (employer)"                    GET /job/page/:pageId
+"Job detail with analytics (employer)"          GET /job/:jobId/detail
+"Hiring dashboard (employer)"                   GET /job/page/:pageId/dashboard
+"Add screening question (employer)"             POST /job/:jobId/screening-question
+"Update screening question (employer)"          PATCH /job/screening-question/:id
+"Reorder screening questions (employer)"        PATCH /job/:jobId/screening-questions/reorder
+"Delete screening question (employer)"          DELETE /job/screening-question/:id
+"View job applications (employer)"              GET /job/:jobId/applications
+"View application detail (employer)"            GET /job/application/:id
+"Change application status (employer)"          PATCH /job/application/:id/status
+"Bulk change status (employer)"                 POST /job/:jobId/applications/bulk-status
+"Add note to application (employer)"            POST /job/application/:id/note
+"Rate an application (employer)"                POST /job/application/:id/rate
+"View applicant profile (employer)"             GET /job/applicant/:id/profile
+"Export applications (employer)"                GET /job/:jobId/applications/export
+"View referrals for job (employer)"             GET /job/:jobId/referrals
+
+================================================================================
+END OF ECOSYSTEM JOB API DOCUMENTATION
+================================================================================

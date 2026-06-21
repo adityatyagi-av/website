@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title><%= title %></title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .header {
+        background-color: #4f46e5;
+        color: white;
+        padding: 20px;
+        border-radius: 8px 8px 0 0;
+      }
+      .content {
+        background-color: #f9fafb;
+        padding: 30px;
+        border: 1px solid #e5e7eb;
+        border-top: none;
+      }
+      .announcement-title {
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 15px;
+        color: #1f2937;
+      }
+      .announcement-content {
+        font-size: 16px;
+        margin-bottom: 20px;
+        white-space: pre-wrap;
+      }
+      .metadata {
+        background-color: #e0e7ff;
+        padding: 15px;
+        border-radius: 6px;
+        margin-top: 20px;
+      }
+      .metadata-item {
+        margin: 5px 0;
+        font-size: 14px;
+      }
+      .footer {
+        text-align: center;
+        margin-top: 20px;
+        padding: 15px;
+        background-color: #f3f4f6;
+        border-radius: 0 0 8px 8px;
+        font-size: 12px;
+        color: #6b7280;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 12px;
+        background-color: #10b981;
+        color: white;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1 style="margin: 0">📢 New Announcement</h1>
+    </div>
+
+    <div class="content">
+      <div class="announcement-title"><%= title %></div>
+
+      <div class="announcement-content"><%= content %></div>
+
+      <div class="metadata">
+        <div class="metadata-item"><strong>From:</strong> <%= createdBy %></div>
+        <% if (programName) { %>
+        <div class="metadata-item">
+          <strong>Program:</strong> <%= programName %>
+        </div>
+        <% } %>
+        <div class="metadata-item"><strong>Date:</strong> <%= date %></div>
+        <div class="metadata-item">
+          <strong>Scope:</strong> <span class="badge"><%= scope %></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>
+        This is an automated message from <%= tenantName %>. Please do not reply
+        to this email.
+      </p>
+    </div>
+  </body>
+</html>

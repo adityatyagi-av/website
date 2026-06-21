@@ -1,0 +1,481 @@
+================================================================================
+NOTIFICATION MODULE — IMPLEMENTATION FLOW & CHANGE LOG
+================================================================================
+
+Version: 1.1.0
+Date: 2026-03-07
+
+================================================================================
+WHAT THIS MODULE DOES
+================================================================================
+
+A centralized notification system that:
+1. Sends in-app notifications in real-time via Socket.IO
+2. Sends email notifications for supported types
+3. Provides REST APIs to fetch, manage, and configure notifications
+4. Supports grouped/aggregated notifications (e.g., "3 people liked")
+5. Respects user block lists and per-category channel preferences
+6. Runs automated cron jobs for cleanup, archival, and session reminders
+
+================================================================================
+FILES CREATED (NEW)
+================================================================================
+
+1. src/services/common/notification.service.js
+   - Central notification engine
+   - Methods: send(), sendBulk(), sendGrouped(),
+     getNotifications(), getUnreadCount(), getById(),
+     markAsRead(), markAllAsRead(), archiveNotification(),
+     clearArchived(), getPreferences(), updatePreferences()
+   - setSocketEmitter() — called by the socket module to register the emit fn
+   - Handles: self-notification suppression, block checks, channel preferences,
+     email dispatch, socket emit, grouped notification merging
+
+2. src/sockets/notificationSocket.js
+   - Socket.IO namespace: /notifications
+   - JWT auth middleware supports both ecosystem User tokens and
+     IncubationUser tokens (resolves to linked User.id)
+   - Multi-device connection tracking via Map<userId, Set<socketId>>
+   - Auto-sends unread count on connection
+   - Handles: notification:mark-read, notification:mark-all-read events
+   - Registers the socket emitter with NotificationService via setSocketEmitter()
+
+3. src/controllers/ecosystem/notification/notification.controller.js
+   - REST controller for ecosystem portal users
+   - Uses req.user.id directly (ecosystem User.id)
+   - Endpoints: getNotifications, getUnreadCount, getById,
+     markAsRead, markAllAsRead, archiveNotification,
+     clearArchived, getPreferences, updatePreferences
+
+4. src/controllers/incubation/portal/notification.controller.js
+   - REST controller for incubation/startup portal users
+   - Resolves IncubationUser.id -> IncubationUser.userId (linked User.id)
+   - Returns 403 if IncubationUser is not linked to an ecosystem User
+   - Same endpoint methods as ecosystem controller
+
+5. src/routes/ecosystem/notification/notification.route.js
+   - Ecosystem routes under /api/ecosystem/notification*
+   - Uses authenticate middleware
+
+6. src/routes/incubation/portal/notification.route.js
+   - Incubation portal routes under /api/incubation-portal/notification*
+   - Uses authenticatePortal middleware
+
+7. src/routes/startup/notification.route.js
+   - Startup portal routes under /api/startup-portal/notification*
+   - Uses authenticate middleware (NOT authenticatePortal)
+   - Uses StartupNotificationController (uses req.user.id directly)
+
+7b. src/controllers/startup/notification.controller.js  [NEW in v1.1.0]
+    - Startup-specific REST controller
+    - Uses req.user.id directly (startup members authenticate as ecosystem Users)
+    - Logically identical to ecosystem NotificationController
+    - Created because startup portal uses authenticate, not authenticatePortal
+
+8. src/validators/notification.validator.js
+   - Joi validation schemas for: getNotifications (query), markAllAsRead (body),
+     updatePreferences (body)
+   - Custom validate() middleware function
+   - Validates all NotificationType and NotificationCategory enum values
+
+9. src/mails/notifications/session-booked.ejs
+10. src/mails/notifications/session-cancelled.ejs
+11. src/mails/notifications/session-reminder.ejs
+12. src/mails/notifications/mentorship-request.ejs
+13. src/mails/notifications/application-status.ejs
+14. src/mails/notifications/task-assigned.ejs
+    - Email templates for the 6 mapped notification types
+    - Located in src/mails/notifications/ directory
+    - Template receives: firstName, title, message, + any extra data fields
+
+================================================================================
+FILES MODIFIED (EXISTING)
+================================================================================
+
+1. prisma/schema.prisma
+   -----------------------------------------------------------------
+   ADDED to User model:
+     notifications            Notification[]
+     notificationPreferences  NotificationPreference[]
+
+   ADDED models:
+     model Notification {
+       id, userId, type, category, priority, title, message, data,
+       isRead, readAt, actionUrl, actorId, actorName, actorAvatar,
+       entityType, entityId, groupKey, isArchived, expiresAt,
+       createdAt, updatedAt
+       Indexes: [userId, isRead, isArchived, createdAt],
+                [userId, category, createdAt],
+                [groupKey],
+                [entityType, entityId],
+                [expiresAt]
+     }
+
+     model NotificationPreference {
+       id, userId, category, inApp, email, push, createdAt, updatedAt
+       Unique: [userId, category]
+     }
+
+   EXPANDED enum NotificationType:
+     From ~22 values to 70+ values covering all modules
+     (Social, Event, Job, Mentorship, Incubation, Startup, General, Community)
+
+   ADDED enums:
+     enum NotificationCategory (12 values)
+     enum NotificationPriority (4 values)
+
+2. src/server.js
+   -----------------------------------------------------------------
+   ADDED import: initializeNotificationSocket from ./sockets/notificationSocket.js
+   ADDED call: initializeNotificationSocket(io) after the other socket inits
+
+3. src/routes/route.js
+   -----------------------------------------------------------------
+   ADDED imports:
+     EcosystemNotificationRouter from ./ecosystem/notification/notification.route.js
+     IncubationNotificationRouter from ./incubation/portal/notification.route.js
+     StartupNotificationRouter from ./startup/notification.route.js
+
+   ADDED to router.use("/api/incubation-portal", ...):
+     IncubationNotificationRouter
+
+   ADDED to router.use("/api/startup-portal", ...):
+     StartupNotificationRouter
+
+   ADDED to router.use("/api/ecosystem", ...):
+     EcosystemNotificationRouter
+
+4. src/cron/cron.js
+   -----------------------------------------------------------------
+   ADDED import: NotificationService from ../services/common/notification.service.js
+   ADDED 4 new cron jobs:
+
+   a) "0 3 * * *" (daily 3 AM) — Delete expired notifications
+      Deletes notifications where expiresAt < now
+
+   b) "30 3 * * *" (daily 3:30 AM) — Auto-archive old read notifications
+      Archives notifications that are read + older than 30 days
+
+   c) "0 4 * * *" (daily 4 AM) — Purge old archived notifications
+      Permanently deletes archived notifications older than 90 days
+
+   d) "*/15 * * * *" (every 15 min) — Session reminders
+      Finds MentorSessions with status=CONFIRMED starting in 60-75 min
+      Sends SESSION_REMINDER to both mentor and mentee
+      Prevents duplicates by checking if a SESSION_REMINDER notification
+      already exists for that session's entityType+entityId
+
+5. src/services/mentor/session.service.js
+   -----------------------------------------------------------------
+   ADDED import: NotificationService
+   REMOVED: All direct db.notification.create() calls inside $transaction blocks
+   ADDED: NotificationService.send() calls OUTSIDE transactions (fire-and-forget)
+   Notification types used:
+     - SESSION_BOOKED (in bookSession, after transaction)
+     - SESSION_CONFIRMED (in confirmSession, after transaction)
+     - SESSION_DECLINED (in declineSession, after transaction)
+     - SESSION_NO_SHOW (in markNoShow, after transaction)
+   ADDED: getMenteeUserId() helper function to resolve mentee's ecosystem userId
+
+6. src/services/mentor/incubator-association.service.js
+   -----------------------------------------------------------------
+   ADDED import: NotificationService
+   REMOVED: All direct db.notification.create() calls
+   ADDED: NotificationService.send() calls (fire-and-forget with .catch)
+   Notification types used:
+     - INCUBATOR_INVITATION (in invite)
+     - INCUBATOR_APPLICATION_APPROVED (in approve)
+     - INCUBATOR_APPLICATION_REJECTED (in reject)
+
+7. src/services/mentor/mentorship.service.js
+   -----------------------------------------------------------------
+   Uses: MENTORSHIP_REQUEST, MENTORSHIP_ACCEPTED
+   FIXED in v1.1.0: Changed from await NotificationService.send() to
+   fire-and-forget NotificationService.send().catch(() => {})
+   (previously: notification failure would crash the entire request)
+
+8. src/services/ecosystem/social/post.service.js
+   -----------------------------------------------------------------
+   ALREADY HAD: NotificationService.sendGrouped/sendBulk calls
+   Uses: POST_LIKE, POST_COMMENT, POST_MENTION
+
+9. src/services/ecosystem/community/community-engagement.service.js
+   -----------------------------------------------------------------
+   ALREADY HAD: NotificationService.sendGrouped calls
+   Uses: COMMUNITY_POST (like), COMMUNITY_COMMENT
+
+10. src/services/ecosystem/community/community-notification.service.js
+    -----------------------------------------------------------------
+    Uses: COMMUNITY_POST, COMMUNITY_MENTION, COMMUNITY_COMMENT,
+          COMMUNITY_JOIN_REQUEST, COMMUNITY_JOIN_APPROVED,
+          COMMUNITY_INVITE, SYSTEM (moderation)
+    FIXED in v1.1.0: Changed all 7 calls from await NotificationService.
+    send/sendBulk() to fire-and-forget .catch(() => {})
+    (previously: notification failure would crash the calling function)
+
+--- ADDED in v1.1.0 ---
+
+11. src/services/ecosystem/social/user-social.service.js
+    -----------------------------------------------------------------
+    ADDED import: NotificationService
+    ADDED notification triggers:
+      - FOLLOW (sendGrouped, verb-only message: "started following you")
+      - CONNECTION_REQUEST (send, "{name} wants to connect with you")
+      - CONNECTION_ACCEPTED (send, "{name} accepted your connection request")
+    All use fire-and-forget .catch(() => {})
+    Category: SOCIAL
+
+12. src/services/ecosystem/event/event-registration.service.js
+    -----------------------------------------------------------------
+    ADDED import: NotificationService
+    ADDED notification triggers OUTSIDE $transaction (fire-and-forget):
+      - EVENT_REGISTRATION_CONFIRMED (sendBulk, in approveRegistrations)
+      - EVENT_WAITLIST_PROMOTED (sendBulk, in promoteFromWaitlist)
+    Category: EVENT
+
+13. src/services/ecosystem/job/job-application.service.js
+    -----------------------------------------------------------------
+    ADDED import: NotificationService
+    ADDED notification trigger:
+      - JOB_NEW_APPLICATION (send, to hiring manager via job.hiringManagerId)
+    Category: JOB
+
+14. src/services/startup/task.service.js
+    -----------------------------------------------------------------
+    ADDED import: NotificationService
+    ADDED notification triggers OUTSIDE $transaction (fire-and-forget):
+      - TASK_ASSIGNED (send, in assignTask, only when assignee != actor)
+      - TASK_STATUS_CHANGED (send, in updateTaskStatus, only when assignee != actor)
+    Category: TASK
+
+================================================================================
+DATA FLOW DIAGRAM
+================================================================================
+
+  ┌─────────────────┐     ┌──────────────────────┐
+  │  Service Layer   │────>│ NotificationService  │
+  │ (mentor, social, │     │     .send()          │
+  │  community, etc) │     │     .sendBulk()      │
+  └─────────────────┘     │     .sendGrouped()    │
+                           └──────────┬───────────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                  │
+                    v                 v                  v
+           ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+           │  Prisma DB   │  │  Socket.IO   │  │    Email     │
+           │ notification │  │ /notifications│  │  (sendMail)  │
+           │   create()   │  │   .emit()    │  │              │
+           └──────────────┘  └──────────────┘  └──────────────┘
+                                      │
+                                      v
+                              ┌──────────────┐
+                              │   Frontend   │
+                              │ notification │
+                              │   :new       │
+                              │   :updated   │
+                              │   :unread-   │
+                              │    count     │
+                              └──────────────┘
+
+================================================================================
+NOTIFICATION LIFECYCLE
+================================================================================
+
+1. CREATION
+   Service calls NotificationService.send() with type, category, title, etc.
+   → Self-notification check (actor === recipient → drop)
+   → Block check (recipient blocked actor → drop)
+   → Channel preference check (inApp=false → drop)
+   → db.notification.create()
+   → Socket emit "notification:new" to recipient
+   → Email dispatch (if email channel enabled and template exists)
+
+2. GROUPING (for rapid-fire events like likes)
+   Service calls NotificationService.sendGrouped() with a groupKey
+   → Same checks as above
+   → Look for existing unread notification with same groupKey within 15 min
+   → If found: update message, merge actors, emit "notification:updated"
+   → If not found: create new notification (delegates to .send())
+
+3. READING
+   User marks notification as read (REST or Socket)
+   → db.notification.update({ isRead: true, readAt: now })
+   → Recalculate unread count
+   → Socket emit "notification:unread-count"
+
+4. ARCHIVAL
+   User archives notification (DELETE /notification/:id)
+   → db.notification.update({ isArchived: true })
+   → Notification hidden from listings
+   → Unread count updated via socket
+
+5. AUTO-ARCHIVE (cron 3:30 AM)
+   → Read + older than 30 days → isArchived: true
+
+6. EXPIRY (cron 3 AM)
+   → expiresAt < now → permanently deleted
+
+7. PURGE (cron 4 AM)
+   → Archived + older than 90 days → permanently deleted
+
+8. SESSION REMINDERS (cron every 15 min)
+   → Confirmed sessions starting in 60-75 min → SESSION_REMINDER to both sides
+   → Duplicate prevention via entityType+entityId lookup
+
+================================================================================
+IMPORTANT DESIGN DECISIONS
+================================================================================
+
+1. UNIFIED USER IDENTITY
+   All notifications use ecosystem User.id regardless of which portal
+   creates them. Incubation/Startup portals resolve via IncubationUser.userId.
+   This ensures a user sees all their notifications in one place.
+
+2. NOTIFICATIONS OUTSIDE TRANSACTIONS
+   In session.service.js and incubator-association.service.js, the
+   NotificationService.send() calls are placed AFTER the Prisma $transaction
+   completes, not inside it. This is intentional:
+   - Prevents notification delivery if the transaction rolls back
+   - Avoids holding transaction locks while doing I/O (socket + email)
+   - Uses .catch(() => {}) to prevent notification failures from breaking
+     the main business logic
+
+3. SOCKET EMITTER PATTERN
+   The notification socket registers an emitter function via
+   setSocketEmitter(fn). The service doesn't import socket.io directly.
+   This decouples the service from the transport layer and avoids
+   circular dependencies.
+
+4. ROUTE ORDERING
+   Routes with static paths (/read-all, /clear, /preferences, /unread-count)
+   are registered BEFORE the /:id parameterized route. Without this,
+   Express would match "/read-all" as id="read-all" and call the wrong handler.
+
+5. GROUPED NOTIFICATION WINDOW
+   The 15-minute grouping window prevents old notifications from being
+   silently updated. After 15 minutes, a new notification is created instead.
+
+6. EMAIL IS FIRE-AND-FORGET
+   Email dispatch failures are caught and logged but never propagate.
+   The in-app notification is always the source of truth.
+
+================================================================================
+SCHEMA RELATIONSHIP MAP
+================================================================================
+
+User (1) -----> (*) Notification       [userId]
+User (1) -----> (*) NotificationPreference [userId, unique per category]
+User (1) -----> (*) UserBlock          [blockerId / blockedId]
+User (1) -----> (0..1) UserSettings    [emailNotifications, pushNotifications]
+
+IncubationUser (0..1) ----> (1) User   [userId, nullable]
+
+Notification indexes:
+  - [userId, isRead, isArchived, createdAt]  — main listing query
+  - [userId, category, createdAt]            — category-filtered queries
+  - [groupKey]                               — grouped notification lookups
+  - [entityType, entityId]                   — duplicate checks (session reminders)
+  - [expiresAt]                              — expiry cron job
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+REST API:
+  [ ] GET /notification returns paginated results, filters work
+  [ ] GET /notification/unread-count returns correct totals
+  [ ] PATCH /notification/:id/read marks as read, updates unread count
+  [ ] PATCH /notification/read-all marks all (or category) as read
+  [ ] DELETE /notification/:id archives, not deletes
+  [ ] DELETE /notification/clear purges archived
+  [ ] GET /notification/preferences returns all 12 categories
+  [ ] PUT /notification/preferences updates and returns all categories
+  [ ] Incubation portal resolves userId correctly
+  [ ] Startup portal resolves userId correctly
+  [ ] Unlinked IncubationUser returns 403
+
+Socket.IO:
+  [ ] Connection with valid User token succeeds
+  [ ] Connection with valid IncubationUser token succeeds
+  [ ] Connection with invalid token fails with error
+  [ ] Initial unread-count emitted on connection
+  [ ] notification:new received when NotificationService.send() called
+  [ ] notification:updated received for grouped notifications
+  [ ] notification:unread-count updates after read/archive actions
+  [ ] Multi-device: both connections receive events
+  [ ] Disconnect properly cleans up connection tracking
+
+Business Logic:
+  [ ] Self-notification suppressed (actorId === recipientId)
+  [ ] Blocked users don't receive notifications
+  [ ] inApp=false preference prevents creation
+  [ ] email=false preference prevents email but allows in-app
+  [ ] Global emailNotifications=false overrides per-category email
+  [ ] Grouped notifications merge within 15-minute window
+  [ ] Grouped notifications create new after 15-minute window
+  [ ] Email templates render correctly for all 6 mapped types
+
+Cron Jobs:
+  [ ] Expired notifications deleted at 3 AM
+  [ ] Old read notifications archived at 3:30 AM
+  [ ] Old archived notifications purged at 4 AM
+  [ ] Session reminders sent for sessions starting in ~1 hour
+  [ ] Session reminder duplicates prevented
+
+Integration:
+  [ ] Mentor session booking creates SESSION_BOOKED notification
+  [ ] Session confirm creates SESSION_CONFIRMED notification
+  [ ] Session decline creates SESSION_DECLINED notification
+  [ ] No-show creates SESSION_NO_SHOW notification
+  [ ] Incubator invite creates INCUBATOR_INVITATION notification
+  [ ] Incubator approve creates INCUBATOR_APPLICATION_APPROVED notification
+  [ ] Incubator reject creates INCUBATOR_APPLICATION_REJECTED notification
+  [ ] Mentorship request creates MENTORSHIP_REQUEST notification
+  [ ] Mentorship accept creates MENTORSHIP_ACCEPTED notification
+  [ ] Post like creates grouped POST_LIKE notification
+  [ ] Post comment creates grouped POST_COMMENT notification
+  [ ] Community actions create appropriate community notifications
+  [ ] Follow creates grouped FOLLOW notification
+  [ ] Connection request creates CONNECTION_REQUEST notification
+  [ ] Connection accept creates CONNECTION_ACCEPTED notification
+  [ ] Event approval creates EVENT_REGISTRATION_CONFIRMED notification
+  [ ] Waitlist promotion creates EVENT_WAITLIST_PROMOTED notification
+  [ ] Job application creates JOB_NEW_APPLICATION notification
+  [ ] Task assign creates TASK_ASSIGNED notification
+  [ ] Task status change creates TASK_STATUS_CHANGED notification
+
+================================================================================
+CHANGE LOG
+================================================================================
+
+v1.1.0 (2026-03-07)
+────────────────────
+1. STARTUP PORTAL FIX
+   - Startup route now uses authenticate middleware (not authenticatePortal)
+   - Created StartupNotificationController (uses req.user.id directly)
+   - Startup members authenticate as ecosystem Users, no userId resolution needed
+
+2. NEW NOTIFICATION TRIGGERS WIRED
+   - Social: FOLLOW (sendGrouped), CONNECTION_REQUEST, CONNECTION_ACCEPTED
+   - Events: EVENT_REGISTRATION_CONFIRMED, EVENT_WAITLIST_PROMOTED (sendBulk)
+   - Jobs: JOB_NEW_APPLICATION
+   - Tasks: TASK_ASSIGNED, TASK_STATUS_CHANGED
+
+3. BUG FIXES
+   - FOLLOW notification: message changed from full-name format to verb-only
+     ("started following you") to prevent duplication in sendGrouped
+   - Connection request data: renamed 'message' to 'connectionMessage' to
+     prevent parameter shadowing
+   - Job notification: recipientId changed from job.hiringManager.id (not in
+     select) to job.hiringManagerId (always available on parent)
+   - Event notifications: moved from after 'return db.$transaction()' (unreachable)
+     to after 'const result = await db.$transaction()' (reachable)
+   - mentorship.service.js: changed await to fire-and-forget .catch(() => {})
+   - community-notification.service.js: changed all 7 await calls to
+     fire-and-forget .catch(() => {})
+
+v1.0.0 (2026-03-05)
+────────────────────
+  Initial release — core notification infrastructure.
+

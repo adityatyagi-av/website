@@ -1,0 +1,53 @@
+PAGE CHAT SYSTEM
+=================
+
+Overview:
+  Pages are the canonical identity for entities in the chat system.
+  Startups and Tenants resolve to their linked Page for display purposes.
+  Pages can also exist independently.
+
+Entity Type: PAGE
+
+Identity Resolution:
+  - Page -> page.name / page.logo (direct, no resolution needed)
+  - This is the canonical display identity for linked startups/tenants
+  - Messages show the Page name to external recipients
+  - Internal team members see "Page Name (sent by FirstName LastName)"
+
+Who Can Send:
+  - Only OWNER or ADMIN role in PageMember table
+  - EDITOR, MODERATOR, ANALYST roles cannot send on behalf of page
+
+Inbox Behavior:
+  - Page conversations appear ONLY in page/entity inbox
+  - Scoped by participant1Type/participant2Type = "PAGE"
+  - Personal user inbox never shows page conversations
+  - All page members can view conversations
+
+Multi-Member Visibility:
+  - All PageMember records can see page conversations
+  - Real-time updates delivered via socket room "user:{pageId}"
+  - All members join this room on socket connect
+
+Deduplication:
+  - Pages are never deduplicated (they ARE the canonical identity)
+  - Linked Startups/Tenants are removed from results when their Page exists
+  - This prevents duplicate entries in search results
+
+Socket Rooms:
+  - On connect: joins "user:{pageId}" for each page membership
+  - Notifications delivered to all page members via this room
+
+Permission Flow:
+  1. User sends message with pageId in request
+  2. validateSendPermission checks:
+     a. PageMember record exists for pageId + userId
+     b. Role is OWNER or ADMIN
+  3. If all pass, message sent as senderType=PAGE, senderId=pageId
+
+PageRole Enum Values:
+  - OWNER: full control, can send messages
+  - ADMIN: can send messages
+  - EDITOR: cannot send messages (content management only)
+  - MODERATOR: cannot send messages (community management only)
+  - ANALYST: cannot send messages (analytics access only)

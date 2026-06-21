@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Session Reminder</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;">
+          <tr>
+            <td style="background-color:#e67e22;padding:30px;text-align:center;">
+              <h1 style="color:#ffffff;margin:0;font-size:24px;">Session Reminder</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px;">
+              <p style="color:#333;font-size:16px;line-height:1.6;">Hi <%= firstName %>,</p>
+              <p style="color:#333;font-size:16px;line-height:1.6;"><%= message %></p>
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
+                <tr>
+                  <td align="center">
+                    <a href="#" style="background-color:#e67e22;color:#ffffff;padding:12px 30px;text-decoration:none;border-radius:6px;font-size:16px;display:inline-block;">View Session</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#f8f9fa;padding:20px;text-align:center;">
+              <p style="color:#999;font-size:12px;margin:0;">This is an automated reminder. Please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -1,0 +1,532 @@
+================================================================================
+FUNDING - STARTUP PORTAL API REFERENCE (for frontend engineers / LLMs)
+================================================================================
+
+Audience:   frontend engineers and code-generation tools building the STARTUP
+            portal funding screens. Every endpoint, parameter, body, response
+            shape, validation, and side effect is documented below.
+
+Sibling document: notes/funding-flow/incubation-api.txt  (admin/incubation side).
+Read the conceptual/mental-model documents first if you need background:
+    notes/funding-flow/complete-flow.txt
+    notes/funding-flow/startup-perspective.txt
+
+--------------------------------------------------------------------------------
+0. GLOBAL CONVENTIONS
+--------------------------------------------------------------------------------
+
+Base path:      /api/startup-portal
+Auth:           Bearer JWT (user token) in the `Authorization` header.
+                Middleware: `authenticate`.
+Authz:          Every funding service call invokes
+                `verifyUserStartupAccess(userId, startupId)` internally. The
+                authenticated user MUST be linked to the `startupId` the client
+                passes in the body/query, otherwise the endpoint 403s.
+Tenant:         Tenant is implicit - derived from the StartupApplication row
+                (no tenantkey header is required on the startup portal).
+Content-Type:   application/json for every POST/PATCH body.
+Idempotency:    Writes are NOT idempotent. A duplicate POST /funding-request
+                creates a second request.
+Error envelope:
+    {
+      "success": false,
+      "message": "<human readable>",
+      "statusCode": 400 | 401 | 403 | 404 | 409 | 500
+    }
+Success envelope:
+    {
+      "success": true,
+      "statusCode": 200 | 201,
+      "message": "<human readable>",
+      "data": <payload>
+    }
+
+All `cuid` values are strings (Prisma CUIDs, ~25 chars).
+All amounts are NUMBER (not strings) - INR rupees by default.
+All timestamps are ISO-8601 strings in UTC.
+
+--------------------------------------------------------------------------------
+1. ENUMS (what the values mean on the UI)
+--------------------------------------------------------------------------------
+
+FundingRequestStatus      (StartupFundingRequest.status)
+    PENDING      = waiting for admin review, still cancellable by startup
+    APPROVED     = admin approved; disbursement auto-created (see disbursementId)
+    REJECTED     = admin rejected (terminal)
+    CANCELLED    = startup cancelled while PENDING (terminal)
+
+DisbursementStatus        (FundingDisbursement.status)
+    PENDING      = created but not approved
+    APPROVED     = admin approved; payment not yet sent
+    PROCESSING   = payment initiated with bank / payment rail
+    COMPLETED    = money received; counts toward totalDisbursedAmount
+    FAILED       = transfer failed (admin can retry PROCESSING or CANCELLED)
+    CANCELLED    = terminated (terminal, but reachable from any state)
+
+DisbursementType          (FundingDisbursement.disbursementType)
+    LUMP_SUM         = one-shot payment
+    TRANCHE          = numbered instalment (`trancheNumber` auto-increments
+                       per application)
+    MILESTONE_BASED  = paid against a milestone (`milestoneName` set)
+
+ApplicationStatus (relevant values for funding):
+    APPLIED | UNDER_REVIEW | SHORTLISTED | EVALUATED | SELECTED | ONBOARDED
+    Only ONBOARDED applications can create funding requests.
+
+--------------------------------------------------------------------------------
+2. THE "REMAINING BALANCE" COMPUTATION
+--------------------------------------------------------------------------------
+
+The server enforces an in-flight-aware cap when a startup posts a request.
+The same formula should be applied on the UI so the request button can be
+disabled or the requestedAmount input can be validated before submit:
+
+    available_to_request =
+          association.approvedFundingAmount
+        - association.totalDisbursedAmount
+        - sum(disbursement.amount
+              where status in [PENDING, APPROVED, PROCESSING])
+        - sum(fundingRequest.requestedAmount
+              where status == PENDING and disbursement is null)
+
+`approvedFundingAmount` is the personal cap set by the admin at onboarding.
+`totalDisbursedAmount` is the cumulative COMPLETED-only total.
+
+The GET /disbursement-history endpoint returns every slice the UI needs to
+compute this on the client, and the server enforces the same invariant on
+every write.
+
+If `approvedFundingAmount` is 0 or null, the UI should treat the cap as
+"not set by admin yet" and block request creation with a clear message.
+
+--------------------------------------------------------------------------------
+3. ENDPOINTS
+--------------------------------------------------------------------------------
+
+All endpoints below are relative to the base path `/api/startup-portal`.
+All endpoints require the `Authorization: Bearer <user-token>` header.
+
+================================================================================
+3.1  GET /application/:applicationId/disbursement-history
+================================================================================
+Purpose
+    Everything the startup needs to render the funding screen for one
+    application: cap, disbursements (+docs), in-flight requests.
+
+URL params
+    applicationId     cuid  (required)   StartupApplication.id
+
+Query params
+    startupId         cuid  (required)   must belong to the auth user
+
+Validations
+    - `startupId` and `applicationId` are required (400 if missing).
+    - verifyUserStartupAccess(userId, startupId) - 403 on mismatch.
+    - application must exist AND application.startupId === startupId (404).
+    - Association lookup is findFirst on (startupId, programId, batchId|null).
+      If none, the history still returns with zeros (see "Empty state").
+
+Response (200)
+    {
+      "success": true,
+      "message": "Disbursement history fetched successfully",
+      "data": {
+        "approvedFundingAmount": 1000000,
+        "totalDisbursedAmount":  500000,
+        "remainingAmount":       500000,
+        "disbursements": [
+          {
+            "id":               "cuid",
+            "programId":        "cuid",
+            "applicationId":    "cuid",
+            "startupId":        "cuid",
+            "tenantId":         "cuid",
+            "batchId":          "cuid | null",
+            "amount":           250000,
+            "currency":         "INR",
+            "disbursementType": "TRANCHE",
+            "status":           "COMPLETED",
+            "trancheNumber":    1,
+            "milestoneName":    null,
+            "reference":        "UTR-111",
+            "notes":            "First tranche",
+            "disbursedById":    "cuid | null",
+            "disbursedAt":      "2026-04-10T09:00:00.000Z | null",
+            "createdAt":        "2026-04-01T07:00:00.000Z",
+            "updatedAt":        "2026-04-10T09:00:00.000Z",
+            "documents": [
+              {
+                "id":            "cuid",
+                "fileName":      "receipt.pdf",
+                "fileUrl":       "https://s3.../receipt.pdf",
+                "fileType":      "application/pdf",
+                "description":   "Payment receipt",
+                "uploadedById":  "cuid | null",
+                "createdAt":     "..."
+              }
+            ],
+            "program": { "id": "cuid", "title": "Accelerator 2026" }
+          }
+        ],
+        "fundingRequests": [
+          {
+            "id":              "cuid",
+            "applicationId":   "cuid",
+            "startupId":       "cuid",
+            "programId":       "cuid",
+            "tenantId":        "cuid",
+            "batchId":         "cuid | null",
+            "requestedAmount": 300000,
+            "currency":        "INR",
+            "status":          "PENDING",
+            "note":            "Need funds for prototype",
+            "docUrl":          "https://s3.../proposal.pdf",
+            "docName":         "funding-proposal.pdf",
+            "reviewedById":    null,
+            "reviewNote":      null,
+            "approvedAmount":  null,
+            "disbursementId":  null,
+            "createdAt":       "...",
+            "updatedAt":       "...",
+            "disbursement":    null
+            // when status=APPROVED, disbursement becomes:
+            //   { "id": "cuid", "status": "PENDING|...", "amount": 300000,
+            //     "disbursedAt": null }
+          }
+        ]
+      }
+    }
+
+Empty state
+    If no association exists yet (startup not onboarded), the response is:
+        { approvedFundingAmount: 0, totalDisbursedAmount: 0,
+          remainingAmount: 0, disbursements: [], fundingRequests: [] }
+    The UI should render a "not onboarded" placeholder in that case.
+
+Sorting
+    Both `disbursements` and `fundingRequests` are ordered by createdAt DESC.
+
+Typical errors
+    400  "applicationId is required" / "startupId is required"
+    403  "User does not have access to this startup"
+    404  "Application not found"
+
+================================================================================
+3.2  POST /application/:applicationId/funding-request
+================================================================================
+Purpose
+    Startup submits a new funding request against its ONBOARDED application.
+
+URL params
+    applicationId     cuid  (required)
+
+Body
+    {
+      "startupId":       "cuid",        // required
+      "requestedAmount": 300000,        // required, number > 0
+      "currency":        "INR",         // optional, default "INR"
+      "note":            "Need funds for prototype development",  // optional
+      "docUrl":          "https://s3.../proposal.pdf",            // optional
+      "docName":         "funding-proposal.pdf"                   // optional
+    }
+
+Validations (in order)
+    1. `applicationId`, `startupId` required (400).
+    2. `requestedAmount` must be a positive number (400).
+    3. verifyUserStartupAccess(userId, startupId) (403).
+    4. application must exist and belong to startupId (404).
+    5. application.status must be "ONBOARDED"
+       -> 400 "You must be onboarded before requesting funding"
+    6. StartupProgramAssociation must exist for
+       (startupId, programId, batchId|null) -> 404 "Program association not
+       found"
+    7. `requestedAmount <= available_to_request` (see section 2)
+       -> 400 "Requested amount exceeds remaining balance. Remaining: <x>,
+               Requested: <y>"
+
+Side effects (inside a DB transaction)
+    - StartupFundingRequest created with:
+        status="PENDING"
+        tenantId and batchId copied from the application
+        programId from the application
+    - FundingHistory row written:
+        action="REQUEST_CREATED"
+        entityType="StartupFundingRequest"
+        entityId=<new request id>
+        performedById=<userId>
+        newValue={ requestedAmount, currency, note }
+    - NO FundingDisbursement is created at this stage - that happens only
+      when/if the admin approves the request.
+
+Response (201)
+    {
+      "success": true,
+      "message": "Funding request created successfully",
+      "data": {
+        "id":              "cuid",
+        "applicationId":   "cuid",
+        "startupId":       "cuid",
+        "programId":       "cuid",
+        "tenantId":        "cuid",
+        "batchId":         "cuid | null",
+        "requestedAmount": 300000,
+        "currency":        "INR",
+        "status":          "PENDING",
+        "note":            "Need funds for prototype development",
+        "docUrl":          "https://s3.../proposal.pdf",
+        "docName":         "funding-proposal.pdf",
+        "reviewedById":    null,
+        "reviewNote":      null,
+        "approvedAmount":  null,
+        "disbursementId":  null,
+        "createdAt":       "...",
+        "updatedAt":       "..."
+      }
+    }
+
+Typical errors
+    400 missing fields / non-positive amount / not onboarded / exceeds cap
+    403 wrong startup
+    404 application or association missing
+
+UI guidance
+    - Disable the submit button until `available_to_request > 0`.
+    - Upload the proposal to S3 first (use your existing S3 upload endpoint)
+      and pass the resulting URL as `docUrl`, filename as `docName`. This
+      endpoint does NOT accept multipart file uploads.
+    - After success, re-fetch 3.1 (/disbursement-history) to refresh the
+      balance and append the new request.
+
+================================================================================
+3.3  GET /application/:applicationId/funding-requests
+================================================================================
+Purpose
+    List every funding request the startup has made for a given application,
+    including the linked disbursement (populated only after admin approval).
+
+URL params
+    applicationId     cuid  (required)
+
+Query params
+    startupId         cuid  (required)
+
+Validations
+    Same as 3.1: both params required; application must belong to startup;
+    verifyUserStartupAccess enforced.
+
+Response (200)
+    {
+      "success": true,
+      "message": "Funding requests fetched successfully",
+      "data": [
+        {
+          "id":              "cuid",
+          "applicationId":   "cuid",
+          "startupId":       "cuid",
+          "programId":       "cuid",
+          "tenantId":        "cuid",
+          "batchId":         "cuid | null",
+          "requestedAmount": 300000,
+          "currency":        "INR",
+          "status":          "APPROVED",
+          "note":            "Prototype funding",
+          "docUrl":          "https://s3.../p.pdf",
+          "docName":         "p.pdf",
+          "reviewedById":    "cuid | null",
+          "reviewNote":      "Approved for milestone 2 | null",
+          "approvedAmount":  300000,
+          "disbursementId":  "cuid | null",
+          "createdAt":       "...",
+          "updatedAt":       "...",
+          "disbursement": {               // null while request is PENDING
+            "id":          "cuid",
+            "status":      "PROCESSING",
+            "amount":      300000,
+            "disbursedAt": null
+          },
+          "program": { "id": "cuid", "title": "Accelerator 2026" }
+        }
+      ]
+    }
+
+Sorting
+    Ordered by createdAt DESC.
+
+Empty state
+    data = [] if the startup has not made any requests yet.
+
+UI guidance
+    - Chip colors by status:
+          PENDING    = neutral/blue
+          APPROVED   = green (with disbursement status underneath)
+          REJECTED   = red (show `reviewNote`)
+          CANCELLED  = muted/grey
+    - If `disbursement` is populated, link through to the disbursement
+      detail in 3.1.
+
+================================================================================
+3.4  PATCH /funding-request/:requestId/cancel
+================================================================================
+Purpose
+    Startup revokes a request it submitted - allowed ONLY while the request
+    is still PENDING.
+
+URL params
+    requestId         cuid  (required)  StartupFundingRequest.id
+
+Body
+    {
+      "startupId": "cuid"               // required
+    }
+
+Validations
+    1. `requestId` and `startupId` required (400).
+    2. verifyUserStartupAccess(userId, startupId) (403).
+    3. Request must exist and `request.startupId === startupId` (404).
+    4. `request.status === "PENDING"` - otherwise 400
+       "Cannot cancel a request with status <X>. Only PENDING requests
+       can be cancelled."
+
+Side effects (inside a DB transaction)
+    - StartupFundingRequest.status = "CANCELLED".
+    - FundingHistory row written:
+        action="REQUEST_CANCELLED"
+        entityType="StartupFundingRequest"
+        entityId=requestId
+        performedById=userId
+        oldValue={ status: "PENDING" }
+        newValue={ status: "CANCELLED" }
+    - NO FundingDisbursement is created/touched (a PENDING request has
+      no disbursement attached).
+
+Response (200)
+    {
+      "success": true,
+      "message": "Funding request cancelled successfully",
+      "data": {
+        "id":             "cuid",
+        "status":         "CANCELLED",
+        "requestedAmount": 300000,
+        ... every other StartupFundingRequest field ...
+      }
+    }
+
+Typical errors
+    400  missing fields / not PENDING
+    403  wrong startup
+    404  request not found
+
+UI guidance
+    - Show the cancel action only when `status === "PENDING"`.
+    - After success, re-fetch 3.1 or 3.3 so the status flips in the UI.
+
+--------------------------------------------------------------------------------
+4. LIFECYCLE AND UI HOOKS
+--------------------------------------------------------------------------------
+
+Timeline that frontend should reflect:
+
+    T0  Startup POSTs 3.2                 -> request.status = PENDING
+    T1  Admin reviews (inbox on admin side). From the startup's POV one of
+        three things happens:
+          (a) Admin approve  -> status = APPROVED, disbursement appears
+          (b) Admin reject   -> status = REJECTED, reviewNote shown
+          (c) Startup cancel -> status = CANCELLED (3.4)
+    T2  After APPROVED: the admin advances the linked disbursement through
+          PENDING -> APPROVED -> PROCESSING -> COMPLETED
+        The startup only observes these transitions (read-only); there is
+        no startup-facing write endpoint for disbursements.
+    T3  Entering COMPLETED bumps association.totalDisbursedAmount, which
+        shrinks `remainingAmount` in the history view.
+
+Polling / refresh strategy
+    - No socket push exists for funding updates today. The UI should
+      re-fetch 3.1 after:
+          user creates a request (3.2)
+          user cancels a request (3.4)
+          user visits / re-focuses the screen
+    - Optionally poll 3.1 every 30-60s while the user sits on the screen
+      and has any non-terminal request/disbursement.
+
+--------------------------------------------------------------------------------
+5. SCHEMA CHEAT SHEET (STARTUP-SIDE SUBSET)
+--------------------------------------------------------------------------------
+
+StartupApplication
+    id, startupId, programId, batchId?, tenantId
+    status (APPLIED | UNDER_REVIEW | SHORTLISTED | EVALUATED | SELECTED
+            | ONBOARDED)
+    requestedFundingAmount, fundingPurpose
+
+StartupProgramAssociation     (personal cap + running total)
+    id, startupId, programId, batchId?, tenantId
+    status (ACTIVE | COMPLETED | OFFBOARDED | REMOVED)
+    isActive, onboardedAt, offboardedAt
+    approvedFundingAmount     -- cap set by admin at onboarding
+    totalDisbursedAmount      -- sum of COMPLETED disbursement.amount
+    UNIQUE(startupId, programId, batchId)
+    -- NOTE: batchId is nullable, so lookups always use findFirst.
+
+FundingDisbursement           (read-only on startup side)
+    id, programId, applicationId, startupId, tenantId, batchId?
+    amount, currency
+    disbursementType (LUMP_SUM | TRANCHE | MILESTONE_BASED)
+    status (PENDING | APPROVED | PROCESSING | COMPLETED | FAILED | CANCELLED)
+    trancheNumber?, milestoneName?, reference?, notes
+    disbursedById?, disbursedAt?
+    documents: FundingDocument[]  (ownerType=DISBURSEMENT)
+
+StartupFundingRequest         (writable on startup side: create + cancel)
+    id, applicationId, startupId, programId, tenantId, batchId?
+    requestedAmount, currency, note, docUrl, docName
+    status (PENDING | APPROVED | REJECTED | CANCELLED)
+    reviewedById?, reviewNote?, approvedAmount?
+    disbursementId?  (set when admin approves)
+
+FundingDocument               (attachments, read-only on startup side)
+    id, ownerType (SOURCE | DISBURSEMENT)
+    fundingSourceId? | disbursementId?
+    fileName, fileUrl, fileType, description, uploadedById, createdAt
+
+FundingHistory                (audit trail, invisible to startup portal,
+                               but every 3.2/3.4 write appends a row here)
+    tenantId, action (FundingActionType), entityType, entityId,
+    performedById, oldValue, newValue, notes, createdAt
+
+--------------------------------------------------------------------------------
+6. COMPLETE FRONTEND FLOW CHECKLIST
+--------------------------------------------------------------------------------
+
+Mount "Funding" tab for an application:
+    [ ] Call GET /application/:applicationId/disbursement-history?startupId=
+    [ ] If data.approvedFundingAmount === 0:
+            render "Your funding cap has not been set yet. Please contact
+            the incubation manager."
+            -> DO NOT render the "Request funding" CTA.
+    [ ] Render summary card: approvedFundingAmount, totalDisbursedAmount,
+        remainingAmount (server-computed). Also compute `available_to_request`
+        per section 2 for the CTA.
+    [ ] Render "Disbursements" list from data.disbursements.
+    [ ] Render "My requests" list from data.fundingRequests (or fetch 3.3).
+
+Create request flow:
+    [ ] Precondition: application.status === "ONBOARDED".
+    [ ] Upload the proposal file to S3 first, get { fileUrl, fileName }.
+    [ ] POST /application/:applicationId/funding-request
+            body: { startupId, requestedAmount, currency?, note?, docUrl?,
+                    docName? }
+    [ ] On success, re-fetch 3.1 to refresh balances and lists.
+
+Cancel request flow:
+    [ ] Only show the action on rows where status === "PENDING".
+    [ ] PATCH /funding-request/:requestId/cancel  body: { startupId }
+    [ ] Re-fetch 3.1 (or 3.3) to reflect the CANCELLED state.
+
+Read-only disbursement detail:
+    The startup portal does not expose a dedicated disbursement detail
+    endpoint. Use the full disbursement object embedded in 3.1's response
+    (with documents[]) to render the drawer/modal.
+
+================================================================================
+End of startup-api.txt
+================================================================================

@@ -1,0 +1,357 @@
+================================================================================
+BATCH MANAGEMENT API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-04-15
+Base URL: /api/incubation-portal
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+Required Header: tenantkey (tenant identifier)
+
+================================================================================
+BATCH MODULE FLOW
+================================================================================
+
+Batches represent cohorts within a program. Each batch has its own application
+window, capacity limits, funding allocation, and lifecycle. Only ONE batch per
+program can be in OPEN status at any time (accepting applications).
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
++----------------------------------------------------------------------+
+|                      BATCH LIFECYCLE                                  |
+|                                                                       |
+|  DRAFT --> UPCOMING --> OPEN --> CLOSED --> UNDER_EVALUATION          |
+|                                                   |                   |
+|                                              COMPLETED                |
+|                                                   |                   |
+|                                              ARCHIVED                 |
++----------------------------------------------------------------------+
+
+BATCH STATUS MEANINGS:
+  DRAFT           -> Batch created, not yet configured/scheduled
+  UPCOMING        -> Scheduled, visible but not yet accepting applications
+  OPEN            -> Currently accepting applications (ONLY ONE per program)
+  CLOSED          -> Application window closed, no more applications
+  UNDER_EVALUATION -> Applications are being evaluated by panel
+  COMPLETED       -> Evaluation complete, startups onboarded
+  ARCHIVED        -> Historical record, batch is inactive
+
+CONSTRAINT: Only one batch per program can have status "OPEN" at a time.
+            Attempting to open a second batch will return 400 error.
+
+STATUS TRANSITIONS (allowed):
+--------------------------------------------------------------------------------
+  DRAFT           -> UPCOMING, OPEN, ARCHIVED
+  UPCOMING        -> OPEN, DRAFT, ARCHIVED
+  OPEN            -> CLOSED, ARCHIVED
+  CLOSED          -> UNDER_EVALUATION, OPEN, ARCHIVED
+  UNDER_EVALUATION -> COMPLETED, ARCHIVED
+  COMPLETED       -> ARCHIVED
+
+================================================================================
+API ENDPOINTS
+================================================================================
+
+1. CREATE BATCH
+================================================================================
+
+POST /api/incubation-portal/program/:programId/batch
+
+Description: Create a new batch within a program. Always created as DRAFT.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "batchName": "Cohort 3 - Q2 2026",
+  "batchCode": "C3-Q2-2026",
+  "description": "Third cohort accepting applications for Q2",
+  "applicationStartDate": "2026-04-01T00:00:00Z",
+  "applicationEndDate": "2026-05-31T23:59:59Z",
+  "maxSlots": 25,
+  "totalFundingAmount": 5000000,
+  "fundingType": "GRANT",
+  "fundingCurrency": "INR",
+  "isFundingAvailable": true
+}
+
+Required: batchName
+Optional: All other fields
+
+Notes:
+  - batchCode must be unique within the program
+  - maxSlots limits number of applications (null = unlimited)
+  - Funding fields configure batch-level funding allocation
+
+Response:
+{
+  "success": true,
+  "data": {
+    "id": "cuid",
+    "programId": "cuid",
+    "batchName": "Cohort 3 - Q2 2026",
+    "batchCode": "C3-Q2-2026",
+    "status": "DRAFT",
+    "applicationStartDate": "2026-04-01T00:00:00Z",
+    "applicationEndDate": "2026-05-31T23:59:59Z",
+    "maxSlots": 25,
+    "isActive": true,
+    ...
+  }
+}
+
+================================================================================
+
+2. UPDATE BATCH
+================================================================================
+
+PATCH /api/incubation-portal/batch/:batchId
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body: (any batch fields to update)
+{
+  "batchName": "Updated Name",
+  "description": "Updated description",
+  "applicationEndDate": "2026-06-15T23:59:59Z",
+  "maxSlots": 30
+}
+
+================================================================================
+
+3. GET BATCHES BY PROGRAM
+================================================================================
+
+GET /api/incubation-portal/program/:programId/batches?status=&page=1&limit=10
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Query:
+  - status (optional): Filter by batch status (DRAFT, OPEN, CLOSED, etc.)
+  - page, limit (optional)
+
+Response includes:
+  - Batch list with _count.startupApplications and _count.startupAssociations
+  - Pagination
+
+================================================================================
+
+4. GET BATCH BY ID
+================================================================================
+
+GET /api/incubation-portal/batch/:batchId
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Response includes detailed batch info with counts of applications and startups.
+
+================================================================================
+
+5. CHANGE BATCH STATUS
+================================================================================
+
+PATCH /api/incubation-portal/batch/:batchId/status
+
+Description: Change the status of a batch following the allowed transitions.
+             IMPORTANT: Only one batch per program can be OPEN at a time.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "newStatus": "OPEN"
+}
+
+Success Response:
+{
+  "success": true,
+  "data": {
+    "id": "cuid",
+    "status": "OPEN",
+    ...
+  },
+  "message": "Batch status changed to OPEN successfully"
+}
+
+Error Responses:
+  - 400: "Only one batch can accept applications at a time. Batch 'Cohort 2'
+          is already open. Close it first before opening another."
+  - 400: "Cannot transition from DRAFT to COMPLETED. Allowed: UPCOMING, OPEN, ARCHIVED"
+
+================================================================================
+
+6. DELETE BATCH
+================================================================================
+
+DELETE /api/incubation-portal/batch/:batchId
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Notes:
+  - Only DRAFT batches with no applications can be deleted
+  - Batches with applications must be archived instead
+
+================================================================================
+
+7. GET BATCH REGISTRATIONS (APPLICATIONS)
+================================================================================
+
+GET /api/incubation-portal/program/:programId/batch/:batchId/registrations?page=1&limit=10&search=&sortBy=createdAt&order=desc&status=
+
+Description: Get all applications submitted to a specific batch
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Query:
+  - status (optional): Filter by application status
+  - search (optional): Search by startup name
+  - page, limit, sortBy, order
+
+================================================================================
+
+8. GET BATCH STARTUPS (ONBOARDED)
+================================================================================
+
+GET /api/incubation-portal/program/:programId/batch/:batchId/startups?page=1&limit=10&search=&sortBy=createdAt&order=desc&programStatus=
+
+Description: Get all onboarded startups in a specific batch
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Query:
+  - programStatus (optional): ACTIVE, COMPLETED, OFFBOARDED, REMOVED
+
+================================================================================
+
+9. BULK REGISTER STARTUPS
+================================================================================
+
+POST /api/incubation-portal/program/:programId/batch/:batchId/bulk-register
+
+Description: Register multiple startups from Excel data into a specific batch.
+             See incubation-program-api.txt section 13 for full details.
+
+Headers: tenantkey: {tenant-key}
+Auth: Required (Portal Token)
+
+Body:
+{
+  "startups": [
+    {
+      "startupName": "...",
+      "founderEmail": "...",
+      ...
+    }
+  ]
+}
+
+================================================================================
+
+10. DOCUMENT REQUESTS BY PROGRAM
+================================================================================
+
+GET /api/incubation-portal/program/:programId/document-requests?batchId=&status=
+
+Description: Get all document requests across a program (or filtered by batch).
+Shows which startups have been requested to provide documents and their response
+status.
+
+Query:
+  - batchId (optional): Filter by specific batch
+  - status (optional): PENDING, RESOLVED, RECEIVED
+
+Response: Array of document requests with startup and application info:
+[
+  {
+    "id": "cuid",
+    "title": "Financial Statement 2025",
+    "description": "...",
+    "status": "PENDING",
+    "requestedAt": "...",
+    "requestedBy": { "id": "...", "fullName": "..." },
+    "startup": { "id": "...", "name": "...", "logoUrl": "..." },
+    "batch": { "id": "...", "batchName": "..." },
+    "responses": [...]
+  }
+]
+
+================================================================================
+
+11. DATA COLLECTION REQUESTS
+================================================================================
+
+See notes/program/data-collection-api.txt for full documentation.
+
+Endpoints on this router:
+
+POST   /program/:programId/data-collection-request     -> Create request
+GET    /program/:programId/data-collection-requests     -> List requests
+GET    /data-collection-request/:requestId              -> Get detail
+PATCH  /data-collection-assignment/:assignmentId/review -> Review submission
+PATCH  /data-collection-request/:requestId/close        -> Close request
+
+================================================================================
+TYPICAL BATCH WORKFLOW
+================================================================================
+
+Step 1: Create Batch
+  POST /program/:programId/batch
+  -> Status: DRAFT
+
+Step 2: Configure Batch
+  PATCH /batch/:batchId
+  -> Set dates, slots, funding
+
+Step 3: Open Batch for Applications
+  PATCH /batch/:batchId/status  { "newStatus": "UPCOMING" }
+  PATCH /batch/:batchId/status  { "newStatus": "OPEN" }
+  -> Applications can now be submitted
+
+Step 4: Monitor Registrations
+  GET /program/:programId/batch/:batchId/registrations
+  -> Review incoming applications
+
+Step 5: Close Applications
+  PATCH /batch/:batchId/status  { "newStatus": "CLOSED" }
+
+Step 6: Move to Evaluation
+  PATCH /batch/:batchId/status  { "newStatus": "UNDER_EVALUATION" }
+  -> Panel members can now evaluate applications
+
+Step 7: Complete Evaluation
+  PATCH /batch/:batchId/status  { "newStatus": "COMPLETED" }
+
+Step 8: Archive (Optional)
+  PATCH /batch/:batchId/status  { "newStatus": "ARCHIVED" }
+
+================================================================================
+IMPORTANT RULES
+================================================================================
+
+1. SINGLE OPEN BATCH: Only one batch per program can have status "OPEN"
+   at any given time. The backend enforces this constraint. If you try to
+   open a second batch, you will get a 400 error with instructions to
+   close the existing open batch first.
+
+2. APPLICATION ROUTING: When startups apply to a program, the backend
+   automatically routes the application to the currently open batch.
+   The frontend does NOT need to send batchId when submitting applications.
+
+3. BATCH DELETION: Only DRAFT batches with zero applications can be deleted.
+   All others must be archived.
+
+4. FUNDING: Batch-level funding (totalFundingAmount) is independent of
+   program-level funding. Each batch manages its own funding pool.
+
+================================================================================

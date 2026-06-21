@@ -1,0 +1,492 @@
+================================================================================
+INCUBATION PORTAL - ACCESS, ROLES, PERMISSIONS (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-04-23
+Base URL: /api/incubation-portal
+
+Authentication: Portal Bearer Token (authenticatePortal middleware)
+Required Header: tenantkey (tenant identifier)
+Required Header: Authorization: Bearer {accessToken}
+
+================================================================================
+MODULE CATALOG IS BACKEND-MANAGED
+================================================================================
+
+The list of available modules is fixed at backend deploy time. It is declared
+in code (src/config/modules.registry.js on the platform) and auto-synced into
+the database on every server boot.
+
+Implications for the incubation portal frontend:
+
+  - Tenants and tenant users CANNOT create, rename, or delete modules from
+    the portal. There is no portal endpoint for that and there will not be.
+  - The set of moduleKeys (TENANT_SETTINGS, USER_MANAGEMENT, ...) is stable
+    once shipped; new modules appear only after a backend release.
+  - DO NOT hardcode the module list, module IDs, or assumed permission sets
+    in the frontend. Always derive them at runtime from
+    GET /api/incubation-portal/me/access (returns the live module +
+    permission map for the signed-in user, after subscription, plan,
+    overrides, role, and direct grants are resolved).
+  - When the platform ships a new module, the portal automatically picks it
+    up on the next /me/access fetch - no portal release required.
+  - moduleKey is the stable identifier used by every gate. Use module IDs
+    only for the super-admin-side plan builder; portal-side code should key
+    off moduleKey.
+
+================================================================================
+OVERVIEW FOR FRONTEND
+================================================================================
+
+Every tenant-facing route in the incubation portal is now guarded by TWO
+independent checks:
+
+  1. SUBSCRIPTION GATE
+     Does the tenant's active subscription (plus any super-admin overrides)
+     grant access to the module that the route belongs to?
+
+  2. PERMISSION GATE
+     Does the logged-in user's role (or direct UserPermission grants) include
+     the required action (C/R/U/D/F) on that module?
+
+If either check fails, the request is rejected. Tenant ADMINS
+(IncubationUserTenant.isAdmin=true) bypass the permission gate but STILL need
+the subscription gate to pass. Core modules (BILLING, INVOICE,
+ADDON_REQUEST) pass the subscription gate even without an active paid
+subscription.
+
+Action codes used consistently:
+  C = Create
+  R = Read
+  U = Update
+  D = Delete
+  F = Full / special (reserved for module-specific extra actions)
+
+================================================================================
+HOW THE FRONTEND SHOULD USE THIS
+================================================================================
+
+1. Right after login + tenant selection, call GET /api/incubation-portal/me/access
+   once and cache the response in-memory (e.g. Redux / Zustand / Context).
+
+2. Use the response to:
+     - Render / hide menu items and buttons (render if modules array contains
+       the moduleKey AND permissions[moduleKey] contains the needed action).
+     - Render pricing-upsell cards for modules NOT in the modules array.
+     - Short-circuit client-side navigation guards.
+
+3. Treat the backend as the source of truth. The permissions map is a UX
+   hint - even if the frontend accidentally shows a button, the API will
+   still block the call. Do not rely on UI to enforce security.
+
+4. Re-fetch /me/access on these events:
+     - On app focus/visibility change (optional, for long-running tabs)
+     - After an admin updates a role or the super admin changes a tenant
+       override (listen via socket "access:invalidated" if wired, or refresh
+       on next navigation)
+     - After a subscription status change event from the billing flow
+
+================================================================================
+ENDPOINT 1 - GET /me/access
+================================================================================
+
+GET /api/incubation-portal/me/access
+
+Description:
+  Returns everything the frontend needs to render the current user's
+  navigation and permission-aware UI for the selected tenant.
+
+Headers:
+  tenantkey: {tenantKey}
+  Authorization: Bearer {accessToken}
+
+Success Response (200):
+{
+  "status": 200,
+  "success": true,
+  "message": "Access resolved",
+  "data": {
+    "tenant": {
+      "id": "clu...",
+      "organizationName": "Acme Incubator",
+      "status": "ACTIVE"
+    },
+    "subscription": {
+      "hasActive": true,
+      "subscriptionId": "clu...",
+      "plan": {
+        "id": "clu...",
+        "name": "Growth Monthly",
+        "type": "MONTHLY"
+      }
+    },
+    "modules": [
+      "TENANT_SETTINGS", "USER_MANAGEMENT", "ROLE_MANAGEMENT",
+      "PROGRAM_CREATION", "PROGRAM_MANAGEMENT", "STARTUP_MANAGEMENT",
+      "OFFICE_SPACE", "FACILITY", "ANNOUNCEMENT", "TASK", "MENTOR",
+      "PANEL", "FUNDING", "PUBLIC_REPOSITORY", "NOTIFICATION", "CHAT",
+      "BILLING", "INVOICE", "ADDON_REQUEST"
+    ],
+    "permissions": {
+      "PROGRAM_CREATION":  ["R"],
+      "PROGRAM_MANAGEMENT": ["C", "R", "U"],
+      "TASK": ["C", "R", "U", "D"],
+      "ANNOUNCEMENT": ["R"],
+      "BILLING": ["R"],
+      "INVOICE": ["R"]
+    },
+    "isMember": true,
+    "isAdmin": false
+  }
+}
+
+Interpretation:
+  - modules[]:   the subscription gate - what the tenant paid for (or was
+                 granted via override).
+  - permissions: the permission gate for THIS user - role-assigned actions
+                 keyed by module. A module may appear in modules[] but be
+                 missing from permissions (user can't access it yet - admin
+                 needs to grant role permissions).
+  - isAdmin=true means the permission gate is bypassed. UI should treat
+                 such a user as having all actions on all modules in modules[].
+
+Error Responses:
+  401 HostName Not Found   - tenantkey header missing
+  401 Unauthorized         - token missing/invalid
+  404 Tenant not found     - tenantkey invalid
+
+================================================================================
+ENDPOINT 2 - ROLE MANAGEMENT (changes + additions)
+================================================================================
+
+All role endpoints are gated by module=ROLE_MANAGEMENT. The role builder
+(the UI screen where an admin designs a role) should pull the list of
+modules from the NEW helper endpoint below instead of the full module list.
+
+2.1  GET /api/incubation-portal/roles/available-modules   [NEW]
+-------------------------------------------------------------------------------
+Description:
+  Returns the list of modules the tenant is ALLOWED to assign permissions
+  for, i.e. only modules included in the tenant's effective subscription.
+  Use this to power the "Modules" column of the role builder UI.
+
+Headers:
+  tenantkey: {tenantKey}
+  Authorization: Bearer {accessToken}
+
+Required permission: ROLE_MANAGEMENT / R
+
+Success Response (200):
+{
+  "status": 200,
+  "success": true,
+  "message": "Available modules fetched",
+  "data": [
+    {
+      "id": "cluq...",
+      "moduleKey": "PROGRAM_MANAGEMENT",
+      "moduleName": "Program Management",
+      "moduleDescription": "Manage batches, applications, registrations, ...",
+      "category": "Programs",
+      "isCore": false,
+      "permissions": [
+        { "id": "clup...", "action": "C" },
+        { "id": "clup...", "action": "R" },
+        { "id": "clup...", "action": "U" },
+        { "id": "clup...", "action": "D" },
+        { "id": "clup...", "action": "F" }
+      ]
+    }
+  ]
+}
+
+Frontend guidance:
+  - Render each module as a row with a checkbox per action.
+  - Group by `category`.
+  - Sort by the existing order from the API (it is already ordered by
+    displayOrder).
+  - If a module has isCore=true, hide it from the builder - core modules
+    are always active and their permissions are managed automatically.
+
+2.2  POST /api/incubation-portal/roles/create-role      [VALIDATION CHANGE]
+-------------------------------------------------------------------------------
+The request shape is unchanged:
+
+  {
+    "tenantKey": "acme",
+    "roleName": "Program Manager",
+    "modulePermissions": [
+      { "moduleId": "cluq...", "actions": ["C", "R", "U"] },
+      { "moduleId": "cluq...", "actions": ["R"] }
+    ]
+  }
+
+NEW VALIDATION:
+  The backend verifies every moduleId in modulePermissions against the
+  tenant's effective modules. If an unsubscribed module is passed, the
+  request fails with:
+
+     403 "Module not in tenant subscription: MENTOR"
+
+Required permission: ROLE_MANAGEMENT / C
+
+After success, the role will immediately appear for assignment and the
+affected tenant's Redis access cache is invalidated.
+
+2.3  PUT /api/incubation-portal/roles/:roleId           [NEW]
+-------------------------------------------------------------------------------
+Description:
+  Update a role's name and/or replace its permission set.
+
+Body:
+  {
+    "tenantKey": "acme",
+    "roleName": "Senior Program Manager",       // optional
+    "modulePermissions": [                      // optional - when supplied,
+      { "moduleId": "...", "actions": ["R"] }   // the whole set is REPLACED.
+    ]
+  }
+
+Required permission: ROLE_MANAGEMENT / U
+
+Validation:
+  - Same "module must be in tenant subscription" check as create-role.
+  - If modulePermissions is omitted, only the name is updated.
+
+Behavior:
+  - Clears the RolePermission rows and re-creates them from the payload.
+  - Invalidates Redis cache for all users currently holding this role.
+
+Success Response (200):
+  { "id": "clu...", "updated": true }
+
+2.4  GET /api/incubation-portal/roles/get-roles         [UNCHANGED]
+2.5  GET /api/incubation-portal/roles/roles-dropdown    [UNCHANGED]
+
+================================================================================
+ENDPOINT 3 - MODULE-GATED ROUTES (SURFACE SUMMARY)
+================================================================================
+
+Every portal route now announces which module + action it requires. The
+frontend should use this mapping to decide what to render.
+
+Convention used in the backend:
+  Method GET / HEAD       -> action R
+  Method POST             -> action C
+  Method PUT / PATCH      -> action U
+  Method DELETE           -> action D
+
+Program-related routes are SPLIT across two modules:
+
+  PROGRAM_CREATION covers:
+    /program/scheme-types, /program/scheme-type
+    /program/governing-bodies, /program/governing-body
+    /program/scheme-question[s] (all methods)
+    /program/create-program, /program/update-program-detail/:id
+    /program/get-program-dropdown, /program/get-program-detail/:id
+    /evaluation-question/* (create, update, delete, reorder, toggle-active)
+
+  PROGRAM_MANAGEMENT covers:
+    /program/:programId/registrations*, /application/*,
+    /program/:programId/add-existing-startup,
+    /program/:programId/create-startup, /programs/:programId/startups,
+    /startups/search, /startup/:startupId,
+    /program/:programId/batch* (all batch operations),
+    /bulk-request-documents, /program/:programId/document-requests,
+    /program/:programId/data-collection-request*,
+    /data-collection-request/:requestId*,
+    /data-collection-assignment/:assignmentId/review
+
+Module -> route mapping (one module per file except program.route.js):
+
+  TENANT_SETTINGS       -> see "Tenant settings mapping" below
+  USER_MANAGEMENT       -> see "User management mapping" below
+  ROLE_MANAGEMENT       -> /roles/*
+  PROGRAM_CREATION      -> see above
+  PROGRAM_MANAGEMENT    -> see above
+  STARTUP_MANAGEMENT    -> /startups/list, /startups/get-startup/:startupId
+  OFFICE_SPACE          -> /office/*, /office-spaces/*, /office-spaces-*/*
+  FACILITY              -> /facility/*, /facility-booking/*, /facility-calendar/*
+  ANNOUNCEMENT          -> /announcement/*, /announcements/*
+  TASK                  -> /task/*, /tasks/*
+  MENTOR                -> /mentor/*, /mentors/*, /mentor-association/*,
+                           /mentor-session*, /mentor-analytics, /mentor-spending,
+                           /startup/:startupId/mentor-usage
+  PANEL                 -> /panel/*, /program/:programId/panel/*,
+                           /application/:applicationId/evaluation*
+  FUNDING               -> /funding/*
+  PUBLIC_REPOSITORY     -> /repository*, /repositories
+  NOTIFICATION          -> /notification/*
+  CHAT                  -> /support-chat/*
+  BILLING   (CORE)      -> /billing/*
+  INVOICE   (CORE)      -> /invoices/*
+  ADDON_REQUEST (CORE)  -> /addons/*
+
+--------------------------------------------------------------------------------
+Tenant settings mapping (final)
+--------------------------------------------------------------------------------
+
+  METHOD  PATH                                MODULE           ACTION
+  GET     /tenant/profile                     TENANT_SETTINGS  R
+  GET     /tenant/computed-metrics            TENANT_SETTINGS  R
+  GET     /fetch-modules-for-tenant           TENANT_SETTINGS  R
+  PATCH   /tenant/profile                     TENANT_SETTINGS  U
+  PATCH   /tenant/profile/branding            TENANT_SETTINGS  U
+  PATCH   /tenant/profile/contact             TENANT_SETTINGS  U
+  PATCH   /tenant/profile/social              TENANT_SETTINGS  U
+  PATCH   /tenant/profile/classification      TENANT_SETTINGS  U
+  PATCH   /tenant/profile/infrastructure      TENANT_SETTINGS  U
+  PATCH   /tenant/profile/operations          TENANT_SETTINGS  U
+  PATCH   /tenant/profile/funding             TENANT_SETTINGS  U
+  PATCH   /tenant/profile/partnerships        TENANT_SETTINGS  U
+  PATCH   /tenant/profile/metrics             TENANT_SETTINGS  U
+  PATCH   /tenant/profile/recognition         TENANT_SETTINGS  U
+  PATCH   /tenant/profile/settings            TENANT_SETTINGS  U
+  PATCH   /tenant/profile/content             TENANT_SETTINGS  U
+  POST    /create-tenant-page                 TENANT_SETTINGS  C
+
+  Public exception:
+    GET   /tenant/get-tenant-info             (no auth, used pre-login)
+
+--------------------------------------------------------------------------------
+User management mapping (final)
+--------------------------------------------------------------------------------
+
+  METHOD  PATH                                MODULE           ACTION
+  GET    /user/team-members                   USER_MANAGEMENT  R
+  GET    /user/users-dropdown                 USER_MANAGEMENT  R
+  GET    /user/get-users                      USER_MANAGEMENT  R
+  POST   /user/create-user-with-roles        USER_MANAGEMENT  C
+
+  Public exceptions (no auth, no module gate):
+    POST  /check-tenant
+    POST  /sign-up
+    POST  /resend-otp
+    POST  /verify-otp
+    POST  /login
+    POST  /select-tenant
+    GET   /refresh
+    POST  /forgot-password
+    POST  /verify-forgot-otp
+    POST  /reset-password
+
+  Self-edit exceptions (auth required, no module gate):
+    GET   /logout
+    GET   /profile
+    POST  /update-profile
+
+  Rationale for self-edit exceptions: a logged-in user must always be able
+  to read and edit their own profile and log themselves out, regardless of
+  what their role grants on USER_MANAGEMENT.
+
+--------------------------------------------------------------------------------
+Audit script
+--------------------------------------------------------------------------------
+
+  npm run audit:access
+
+  Scans every file under src/routes/incubation/portal/*.route.js, classifies
+  each route as OK / ALLOWLISTED / MISSING, prints a summary table, and
+  exits non-zero on any MISSING. Treat a non-zero exit as a release-blocking
+  failure: every gated route must either carry requireAccess (directly, via
+  a router-level Router.use, or via a helper like ...management(ACTIONS.R))
+  OR be on the explicit allowlist in the script with a documented reason
+  (PUBLIC_AUTH, SELF_EDIT, DISCOVERY).
+
+  When adding a new route file or new endpoint, run the audit before merging.
+  When intentionally exposing a new public/self-edit endpoint, add it to the
+  ALLOWLIST in scripts/audit-access-annotations.js with a one-word reason.
+
+================================================================================
+ERROR CODES THE FRONTEND WILL RECEIVE
+================================================================================
+
+When a gated call fails, the response uses the standard apiResponse format
+with a structured message:
+
+  {
+    "status": 403,
+    "success": false,
+    "message": "MODULE_NOT_IN_SUBSCRIPTION",
+    "data": null,
+    "errors": [{ "moduleKey": "FUNDING", "action": "C" }]
+  }
+
+Reason codes and recommended UI handling:
+
+  SUBSCRIPTION_INACTIVE           402  Show "Subscription inactive" banner +
+                                       link to /billing.
+  MODULE_NOT_IN_SUBSCRIPTION      403  Show upgrade card for that module.
+  INSUFFICIENT_PERMISSION         403  Show "Ask your admin for access".
+  ROLE_NOT_ASSIGNED               403  Show "Your account has not been added
+                                       to this tenant" or trigger logout.
+  INVALID_MODULE_KEY              400  Developer bug - log + report.
+
+The errors[0] payload always carries the { moduleKey, action } that failed
+so the UI can compose the right recovery CTA.
+
+================================================================================
+CACHING AND FRESHNESS
+================================================================================
+
+Server-side, access data is cached in Redis with a 5-minute TTL:
+
+  access:tenant:{tenantId}:modules             (subscription + overrides)
+  access:tenant:{tenantId}:user:{userId}:perms (role + direct permissions)
+
+The server actively invalidates these caches on:
+
+  - Plan module changes (PUT /super-admin/update-plan-modules) -> all
+    tenants on that plan.
+  - Tenant module override changes (create / update / delete) -> that
+    tenant only.
+  - Role create / update -> the target tenant AND every user currently
+    holding that role.
+
+Frontend: calling GET /me/access is cheap (Redis-backed). It is safe to
+call on every navigation to a permission-sensitive page if you want
+near-real-time freshness.
+
+================================================================================
+MIGRATION NOTES FOR FRONTEND
+================================================================================
+
+1. Replace any hardcoded role-name checks ("if user.role === 'ADMIN'") with
+   checks against the /me/access response:
+
+      hasModule(key)            -> modules.includes(key)
+      can(key, action)          -> isAdmin || (permissions[key] || []).includes(action)
+
+2. Remove any frontend logic that assumes "admin sees everything". It still
+   does, but ONLY for modules the tenant is subscribed to; core modules are
+   always accessible.
+
+3. The role builder UI must switch to GET /roles/available-modules instead
+   of the super-admin module list. This prevents admins from creating roles
+   that reference modules they did not purchase.
+
+4. Render a "pending permission" state if a module is in `modules` but
+   missing from `permissions` - the admin hasn't granted role access yet.
+
+5. When you get a 402/403 with a reason code, prefer redirecting to the
+   relevant self-service page (billing for 402, role management request
+   for INSUFFICIENT_PERMISSION) over a generic error toast.
+
+================================================================================
+CHECKLIST FOR THE FRONTEND LLM
+================================================================================
+
+[ ] Call /me/access after login + tenant selection; store in global state.
+[ ] Build `can(module, action)` and `hasModule(module)` helpers.
+[ ] Wrap every route-guard / menu-item / action-button with those helpers.
+[ ] Update the role builder to use /roles/available-modules.
+[ ] Support PUT /roles/:roleId for editing roles.
+[ ] Handle 402 / 403 error reason codes per the table above.
+[ ] Add a "Modules" informational section on the billing / plan page using
+    the `modules` array from /me/access.
+[ ] Remove any legacy hardcoded module lists; treat the API as source of truth.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

@@ -1,0 +1,2075 @@
+================================================================================
+ECOSYNC PLATFORM - COMPREHENSIVE UX/UI DESIGNER DOCUMENTATION
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. Platform Overview
+2. Portal Architecture
+3. User Roles & Profiles
+4. Ecosystem Platform (Deep Dive)
+5. Incubation Portal (Deep Dive)
+6. Startup Portal (Deep Dive)
+7. Mentor Portal (Deep Dive)
+8. Investor & VC Portal (Deep Dive)
+9. Freelancer Portal (Deep Dive)
+10. Super Admin Portal (Deep Dive)
+11. Cross-Platform Features
+12. Data Relationships & Entity Map
+13. Key Workflows & User Journeys
+14. Payment & Subscription Architecture
+15. Notification System
+16. Gamification System
+17. Design Considerations & Recommendations
+
+================================================================================
+1. PLATFORM OVERVIEW
+================================================================================
+
+EcoSync is a comprehensive startup ecosystem platform that connects startups,
+mentors, investors, VC firms, freelancers, incubators, and professionals in a
+unified digital environment.
+
+The platform operates as TWO distinct products:
+
+PRODUCT A: ECOSYSTEM PLATFORM (ecosync.co.in)
+  - A single, integrated platform where all user types (startups, mentors,
+    investors, professionals, students, freelancers, VC partners) coexist
+  - Think of it as "LinkedIn meets AngelList" for the startup ecosystem
+  - Features: Social networking, job board, events, communities, mentorship
+    marketplace, networking/discovery, and messaging
+
+PRODUCT B: INCUBATION PORTAL (SaaS - e.g., iit.admin.ecosync.co.in)
+  - A multi-tenant SaaS product for incubators/accelerators
+  - Each incubator gets their own white-labeled portal (custom subdomain)
+  - Features: Program management, startup pipeline, evaluation panels,
+    office/facility management, funding disbursement, task management,
+    mentor management, and announcements
+  - Connected to the ecosystem via shared user accounts and data bridges
+
+Both products share a common backend and database, but have completely separate
+frontend interfaces, authentication flows, and user experiences.
+
+================================================================================
+2. PORTAL ARCHITECTURE
+================================================================================
+
+2.1 API STRUCTURE
+-----------------
+The backend organizes endpoints by portal context:
+
+  /api/ecosystem/*          -> Ecosystem Platform APIs
+  /api/incubation/*         -> Incubation admin onboarding/auth APIs
+  /api/incubation-portal/*  -> Incubation Portal feature APIs (requires tenantKey header)
+  /api/startup-portal/*     -> Startup-side view of incubation features
+  /api/mentor/*             -> Mentor's own management portal
+  /api/super-admin/*        -> EcoSync internal admin
+
+2.2 MULTI-TENANCY MODEL (Incubation Portal)
+--------------------------------------------
+Each incubator is a "Tenant" with:
+  - A unique tenantKey (used as subdomain: {tenantKey}.admin.ecosync.co.in)
+  - Optional custom domain support
+  - Status: ACTIVE, INACTIVE, SUSPENDED
+  - Its own subscription plan, users, roles, programs, offices, and data
+  - Tenant data is isolated; one incubator cannot see another's data
+  - Redis caching for tenant lookups (24-hour TTL)
+
+Authentication for the incubation portal requires BOTH:
+  1. A valid tenantKey in the request header (identifies which incubator)
+  2. A valid JWT token (identifies which user within that incubator)
+
+2.3 ECOSYSTEM PLATFORM ARCHITECTURE
+-------------------------------------
+The ecosystem platform uses standard JWT authentication:
+  - Users sign up with email/password or OAuth (Google, Facebook, Apple)
+  - Users can have MULTIPLE roles simultaneously (e.g., a Founder who is also
+    a Mentor and an Investor)
+  - Role-based access controls determine what features and data are visible
+  - Optional authentication on discovery/browsing endpoints (better experience
+    when logged in, but browsable without account)
+
+================================================================================
+3. USER ROLES & PROFILES
+================================================================================
+
+3.1 ECOSYSTEM USER ROLES (PortalUserRole enum)
+------------------------------------------------
+Users can hold one or more of these roles:
+
+  STUDENT
+    - Looking for internships and career opportunities
+    - Has: internship interests, career goals, preferred industries
+    - Can: Browse jobs, apply for internships, join communities, attend events
+
+  PROFESSIONAL
+    - Working professional seeking opportunities
+    - Has: open-to-opportunities flag, preferred roles/locations, salary
+      expectations, notice period, remote preference
+    - Can: Browse/apply for jobs, network, post content, join communities
+
+  FREELANCER
+    - Independent contractor/consultant
+    - Has: hourly rate, availability status, portfolio, categories, ratings,
+      total projects, total earnings, payout accounts
+    - Can: Receive gig requests, manage projects, track milestones, earn and
+      withdraw money, manage contracts
+
+  FOUNDER
+    - Startup founder/co-founder
+    - Has: startup page(s), team members, startup metrics, pitch decks,
+      funding rounds, investor updates
+    - Can: Create startup pages, apply to incubation programs, book mentors,
+      post jobs, manage startup team, request office space
+
+  MENTOR
+    - Experienced professional offering mentorship
+    - Has: mentor profile (expertise, industries, session types, pricing,
+      availability calendar, reviews/ratings, packages)
+    - Can: Accept sessions, manage mentees, create packages, track earnings,
+      associate with incubators, conduct video sessions (Jitsi)
+
+  INVESTOR
+    - Angel investor or individual investor
+    - Has: investor profile (investment stages, sectors, check sizes, deal flow,
+      portfolio, syndicate memberships)
+    - Can: Manage deal pipeline (sourced -> screening -> due diligence ->
+      term sheet -> invested/passed), organize syndicates, track portfolio
+
+  VC_PARTNER
+    - Venture capital firm partner/analyst
+    - Has: VC profile (firm role, focus sectors/stages, deals sourced/closed,
+      IC voting rights, term approval authority)
+    - Can: Manage VC firm deal flow, fund management, portfolio monitoring,
+      LP relations, team management (with granular permissions)
+
+  INCUBATION_PERSON
+    - Staff member at an incubator/accelerator
+    - Bridge role connecting ecosystem profile to incubation portal user
+
+3.2 INCUBATION PORTAL ROLES
+-----------------------------
+Within each tenant (incubator), users have these characteristics:
+
+  Admin (isAdmin: true)
+    - Full access to all tenant features
+    - Can manage users, roles, programs, office spaces, facilities
+    - Can create and manage announcements, view all startups
+    - Can manage mentor associations and funding
+
+  Panel Member (isPanelMember: true)
+    - Assigned to evaluate startup applications for specific programs
+    - Can submit evaluations with scoring against defined criteria
+    - Can view application details for programs they're assigned to
+
+  Regular User (with custom Role)
+    - Access controlled by custom roles with module-based permissions
+    - Each role has specific permissions (e.g., "can manage programs",
+      "can view startups", "can book facilities")
+
+Permission System:
+  Module -> Permission -> RolePermission (role-based) + UserPermission (user-based)
+  - Permissions are defined per module (e.g., "Programs" module has
+    "create_program", "view_program", "manage_applications" permissions)
+  - Roles aggregate permissions
+  - Individual users can also have direct permission overrides
+
+3.3 STARTUP MEMBER ROLES
+--------------------------
+Within a startup team:
+  OWNER   - Full control, can manage all startup settings
+  ADMIN   - Administrative access, can manage team and applications
+  MEMBER  - Standard access, can view and contribute
+  OTHER   - Custom role with specific permissions
+
+3.4 COMMUNITY ROLES
+---------------------
+Within each community:
+  OWNER     - Community creator, full control
+  ADMIN     - Can manage settings, channels, rules, members
+  MODERATOR - Can moderate posts, manage reports, ban/mute members
+  MEMBER    - Can post, comment, engage with content
+
+3.5 SUPER ADMIN ROLES
+-----------------------
+EcoSync internal staff:
+  ADMIN               - Full platform control
+  MARKETING           - Marketing operations
+  MANAGER             - Operations management
+  RELATIONSHIP_MANAGER - Tenant relationship management
+
+================================================================================
+4. ECOSYSTEM PLATFORM - DEEP DIVE
+================================================================================
+
+4.1 AUTHENTICATION & ONBOARDING
+---------------------------------
+Registration Flow:
+  1. User enters email, password, first name, last name
+  2. OTP sent to email for verification
+  3. User verifies OTP
+  4. User selects a username (availability check provided)
+  5. User selects their PRIMARY role (Student, Professional, Founder, etc.)
+  6. User can add additional roles later
+  7. Profile completion stages tracked (profileCurrentStage: 0-N)
+
+Login Options:
+  - Email/password login
+  - Google OAuth
+  - Facebook OAuth
+  - Apple Sign-In
+  - Social accounts can be linked/unlinked after registration
+
+Password Recovery:
+  - Forgot password -> OTP to email -> Verify OTP -> Reset password
+
+Session Management:
+  - JWT access tokens + refresh tokens
+  - Cookie-based token storage supported
+  - Token refresh endpoint for seamless session extension
+
+4.2 USER PROFILE
+-----------------
+The profile is a comprehensive professional identity, structured as:
+
+Basic Information:
+  - Profile photo, cover image
+  - First name, last name, username
+  - Headline (e.g., "Full-Stack Developer | Startup Enthusiast")
+  - Bio (long-form description)
+  - Date of birth, gender
+  - Location (city, state, country, timezone, remote flag)
+  - Social links (LinkedIn, Twitter, GitHub, website, Facebook, Instagram,
+    YouTube, Medium, Behance, Dribbble)
+
+Skills Section:
+  - Skills with proficiency levels (Beginner to Expert)
+  - Years of experience per skill
+  - "Currently learning" flag
+  - Skill endorsements from connections
+  - Skills are from a master catalog with categories
+
+Education:
+  - Institution (linked to organization Pages)
+  - Degree, field of study
+  - Start/end dates, current flag
+  - Grade, activities, description
+
+Experience:
+  - Company (linked to organization Pages)
+  - Title, employment type (Full-time, Part-time, Contract, etc.)
+  - Location, remote flag
+  - Start/end dates, current flag
+  - Description, skills used
+
+Certifications:
+  - Issuing organization (linked to Pages)
+  - Issue date, expiration date
+  - Credential ID and URL
+
+Projects:
+  - Title, description, URL, image
+  - Technologies used
+  - Date range
+
+Role-Specific Profiles:
+  - Student profile (internship interests, career goals)
+  - Professional profile (job preferences, salary expectations)
+  - Freelancer profile (rates, availability, portfolio)
+  - Investor profile (investment thesis, check sizes, sectors)
+  - VC profile (firm role, deal authority)
+  - Mentor profile (expertise, pricing, session types)
+
+Profile Analytics:
+  - Profile visitor tracking (who viewed your profile, when)
+  - Profile insights (view trends, engagement metrics)
+  - Entity visit tracking (for both user profiles and pages)
+
+4.3 SOCIAL FEED & POSTS
+-------------------------
+Post Types:
+  - TEXT: Plain text posts
+  - IMAGE: Posts with one or more images
+  - VIDEO: Posts with video content
+  - DOCUMENT: Posts with attached documents
+  - POLL: Interactive polls with multiple options
+  - ARTICLE: Long-form articles
+  - LINK: Link shares with preview metadata
+
+Post Features:
+  - Media attachments (via S3 pre-signed URL uploads)
+  - Hashtags (auto-tracked, trending calculation)
+  - User mentions (@username)
+  - Post visibility: PUBLIC, CONNECTIONS_ONLY, PRIVATE
+  - Pin posts to profile
+  - Edit posts (tracked with isEdited flag)
+  - Archive posts
+
+Engagement:
+  - Like/unlike posts
+  - Comment (threaded, with parent/child replies)
+  - Like/unlike comments
+  - Share/repost with optional comment
+  - Bookmark/save posts
+  - Poll voting (single or multiple choice)
+  - Stories (ephemeral content with view tracking)
+
+Feed System:
+  The feed uses a sophisticated scoring algorithm with multiple feed types:
+
+  1. Personalized Feed - Algorithm-driven based on:
+     - User interests and preferences
+     - Connection/following activity
+     - Engagement history (dwell time, scroll depth, link clicks)
+     - Content freshness and trending score
+     - Muted keywords filtering
+
+  2. Following Feed - Posts from people you follow
+  3. Trending Feed - Currently popular content
+  4. Discover Feed - Content outside your network
+  5. Topic Feed - Posts by specific hashtag/topic
+  6. Connections Feed - Posts from connections only
+
+  Feed Preferences (user-configurable):
+  - Show connections only / following only
+  - Interest topics
+  - Muted keywords
+  - Preferred content types
+
+  Feed Actions:
+  - Hide post (with reason: not interested, seen too often, spam, etc.)
+  - Report post
+  - Mute user
+
+  Engagement Tracking (per post view):
+  - Dwell time (seconds spent viewing)
+  - Scroll depth (% of post viewed)
+  - Link clicks
+  - Media views
+
+4.4 SOCIAL NETWORKING & CONNECTIONS
+-------------------------------------
+Relationship Types:
+
+  Follow (asymmetric):
+  - Any user can follow another
+  - Follower sees followee's public posts in feed
+  - No approval required
+
+  Connection (symmetric):
+  - Send connection request with optional message
+  - Recipient can accept or reject
+  - Once connected, both see each other's content
+  - Can withdraw pending requests
+
+  Block:
+  - Block user with optional reason
+  - Blocked user cannot see your content or interact
+  - Unblock available
+
+  Mute:
+  - Mute user's content from your feed
+  - User is not notified
+
+Features:
+  - Mutual followers/following/connections discovery
+  - Batch relationship checking (up to 100 users at once)
+  - Privacy settings control who can send connection requests
+  - Message permissions: EVERYONE, CONNECTIONS, NO_ONE
+
+4.5 NETWORKING & DISCOVERY
+----------------------------
+The networking module provides intelligent discovery across the ecosystem:
+
+Discovery Categories:
+  1. People - Discover professionals, founders, mentors, investors
+  2. Startups - Discover startup companies
+  3. Incubators - Discover incubation centers and their programs
+  4. Pages - Discover organization pages (companies, institutions, VCs)
+
+Features:
+  - Global search across all entity types
+  - Co-founder matching with preference system:
+    - Set preferences: skills needed, commitment level, location, equity split
+    - Algorithm matches compatible co-founder seekers
+  - Network connections (your existing network)
+  - AI-powered suggestions (people you may want to connect with)
+  - Save/unsave profiles for later
+  - Dismiss profiles from suggestions
+
+Scoring Algorithm:
+  The discovery system uses weighted scoring to rank results based on:
+  - Profile completeness
+  - Mutual connections
+  - Shared interests/skills
+  - Activity level
+  - Location proximity
+  - Role compatibility
+
+4.6 ORGANIZATION PAGES
+------------------------
+Pages represent organizations (not individual users). Types:
+
+  STARTUP     - Startup company page (mission, vision, elevator pitch, stage)
+  COMPANY     - Established company (revenue range, key services)
+  VC_FIRM     - Venture capital firm (check sizes, investment thesis, AUM)
+  INSTITUTION - Educational institution (student/faculty count, accreditations)
+  ORGANIZATION - General organization (membership size, key initiatives)
+  OTHERS      - NGO, Club, Alumni Group, etc.
+
+Page Features:
+  - Creator and team members with roles (OWNER, ADMIN, EDITOR, MEMBER)
+  - Follower system (follow/unfollow)
+  - Page-level posts
+  - Job posting (tied to page)
+  - Event hosting (tied to page)
+  - Analytics (views, follower growth, engagement)
+  - Verification status (NOT_STARTED, PENDING, VERIFIED, REJECTED)
+  - Visibility settings (PUBLIC, PRIVATE)
+  - Hiring status flag with open position count
+
+Startup Pages specifically support:
+  - Funding rounds tracking
+  - Milestone tracking (product, funding, growth, team, etc.)
+  - Pitch deck management (versioned)
+  - Investor updates (quarterly)
+  - Startup metrics recording
+  - Team member management
+  - Office space ownership
+
+4.7 EVENTS
+-----------
+Full-featured event management system:
+
+Event Types:
+  - Conferences, Workshops, Meetups, Hackathons, Demo Days,
+    Pitch Competitions, Webinars, Panel Discussions, Networking Events
+
+Event Formats:
+  - IN_PERSON, VIRTUAL, HYBRID
+
+Event Lifecycle:
+  DRAFT -> PUBLISHED -> LIVE -> COMPLETED (or CANCELLED)
+
+Event Features:
+  - Rich event details (title, slug, description, images, tags)
+  - Date/time with timezone support (default: Asia/Kolkata)
+  - Location (physical address with lat/lng, or virtual URL)
+  - Capacity management
+  - Registration deadline
+
+  Ticket Management:
+  - Multiple ticket tiers (e.g., Early Bird, Regular, VIP)
+  - Pricing per tier with currency support
+  - Quantity limits and sale windows
+  - Sold count tracking
+
+  Registration:
+  - Register for events (with ticket selection)
+  - Payment processing via Razorpay for paid events
+  - Registration statuses: REGISTERED, CONFIRMED, WAITLISTED, CANCELLED,
+    CHECKED_IN, REJECTED, NO_SHOW
+  - Approval-based registration (optional)
+  - Waitlist with promotion
+  - Check-in (individual and bulk)
+  - Export registration lists
+
+  Team Management:
+  - Organizers (multiple, with roles)
+  - Speakers (name, title, company, bio, photo, topic)
+  - Sponsors (name, logo, tier: PLATINUM/GOLD/SILVER/BRONZE)
+
+  Content:
+  - Event timeline/agenda (sessions with times and speakers)
+  - Event media (photos/videos)
+  - Event updates (notifications to registrants)
+
+  Live Events:
+  - Live streaming via Jitsi integration
+  - Start/pause/resume/end live sessions
+  - Peak viewer tracking
+  - Live participant management (HOST, MODERATOR, SPEAKER, PARTICIPANT)
+  - Recording support
+  - Live session history
+
+  Social Features:
+  - Bookmark/save events
+  - Event invitations (send/accept/decline)
+  - Post-event feedback (rating + review)
+  - Q&A during events (submit, answer, upvote, pin questions)
+  - Live polls during events
+
+  Recurring Events:
+  - Support for DAILY, WEEKLY, BIWEEKLY, MONTHLY recurrence
+  - Parent-child event relationships
+  - Instance tracking
+
+  Analytics:
+  - View count, registration count, bookmark count
+  - Registration summary/breakdown
+  - Feedback aggregate
+
+  Reminders:
+  - 24-hour and 1-hour automated reminders
+
+4.8 JOB BOARD
+--------------
+Complete job marketplace:
+
+Job Listing:
+  - Title, slug, rich description
+  - Requirements, responsibilities, benefits (arrays)
+  - Job type: FULL_TIME, PART_TIME, CONTRACT, FREELANCE, INTERNSHIP
+  - Work mode: REMOTE, HYBRID, ON_SITE
+  - Experience level: ENTRY, MID, SENIOR, LEAD, EXECUTIVE
+  - Salary range with currency and period (hourly/monthly/yearly)
+  - Skills (required + nice-to-have)
+  - Location, department, industry
+  - Urgency: LOW, NORMAL, HIGH, URGENT
+  - Application deadline
+  - Number of openings
+  - Confidential posting option
+  - Category system (hierarchical)
+  - Duplicate job support
+
+  Screening Questions:
+  - Custom questions per job
+  - Types: TEXT, MULTIPLE_CHOICE, YES_NO, NUMERIC, DATE
+  - Required/optional flags
+  - Eliminatory questions (auto-filter unqualified applicants)
+  - Expected answers for scoring
+
+  Job tied to: Page (organization) or Startup or User
+  Hiring manager assignment
+
+Applicant Experience:
+  - Discover jobs with filters (type, mode, experience, salary, skills)
+  - Recommended jobs (personalized)
+  - Trending jobs
+  - Similar jobs
+  - Jobs by skill
+  - Connections at company (see who you know)
+  - Skill gap analysis (what skills you need for a job)
+  - Apply with resume, cover letter, portfolio, screening answers
+  - Track applications (statuses below)
+  - Withdraw applications
+  - Bookmark/save jobs
+  - Application insights
+
+Application Pipeline (employer view):
+  APPLIED -> SCREENING -> SHORTLISTED -> INTERVIEW -> OFFER -> HIRED
+                                                              -> REJECTED
+                                                              -> WITHDRAWN
+  - View applications with filters
+  - Change status (individual and bulk)
+  - Add internal notes (public/private)
+  - Rate applications (score + comment)
+  - Application timeline (status change history)
+  - Export applications
+  - Hiring dashboard (metrics overview)
+
+Job Alerts:
+  - Create saved searches with criteria
+  - Frequency: DAILY, WEEKLY, BIWEEKLY, MONTHLY
+  - Toggle on/off
+
+Referrals:
+  - Refer candidates for jobs
+  - Track referral status (PENDING, APPLIED, HIRED, REJECTED)
+  - Referral linked to application
+
+4.9 COMMUNITIES
+----------------
+Reddit/Discord-style community system:
+
+Community Structure:
+  - Name, slug, description, about
+  - Cover image, logo
+  - Category: TECHNOLOGY, STARTUP, DESIGN, MARKETING, FINANCE,
+    HEALTHCARE, EDUCATION, AI_ML, BLOCKCHAIN, SUSTAINABILITY, CAREER, GENERAL
+  - Visibility: PUBLIC, PRIVATE, HIDDEN
+  - Tags, guidelines, website, location, industry
+  - Banner color customization
+
+Channels:
+  - Multiple channels per community (like Discord channels)
+  - Default channel, read-only channels
+  - Ordering support
+
+Rules:
+  - Community rules with titles and descriptions
+  - Ordered display
+
+Membership:
+  - Join directly (public communities) or request to join (approval required)
+  - Join questions (screening for approval-based communities)
+  - Invite members (by user or generate invite link with expiry)
+  - Member roles: OWNER, ADMIN, MODERATOR, MEMBER
+  - Role changes by admins
+  - Max member limits
+
+Moderation:
+  - Ban members (with reason and duration, temporary or permanent)
+  - Unban members
+  - Mute members (prevent posting)
+  - Warn members
+  - Ban log / moderation history
+  - Notification preferences per community (ALL, MENTIONS, NONE)
+  - Post approval requirement (optional)
+
+Posts (within communities):
+  - Post types: TEXT, IMAGE, VIDEO, LINK, POLL, QUESTION, DISCUSSION
+  - Post to specific channels
+  - Pin/unpin posts
+  - Approve/reject posts (if moderation enabled)
+  - Search within community
+
+Engagement:
+  - Like posts and comments
+  - Threaded comments
+  - Bookmark posts
+  - Share posts
+  - Polls with voting
+  - Mentions (@user)
+  - Hashtags
+  - Report posts and comments
+
+Content Moderation:
+  - Moderation queue for reported content
+  - Report reasons: SPAM, HARASSMENT, HATE_SPEECH, MISINFORMATION,
+    INAPPROPRIATE, SELF_HARM, VIOLENCE, COPYRIGHT, OTHER
+  - Review reports with resolution
+  - Bulk moderation actions
+  - Member moderation history
+  - Activity logging
+
+Analytics:
+  - Community overview stats
+  - Member growth charts
+  - Engagement metrics
+  - Top contributors
+  - Content breakdown by type
+  - Member retention data
+
+4.10 MENTORSHIP MARKETPLACE (Ecosystem Side)
+----------------------------------------------
+From the ecosystem, users can:
+
+  Discover Mentors:
+  - Browse mentors with filters (expertise, industry, price, rating)
+  - Featured mentors (promoted/highlighted)
+  - Recommended mentors (personalized based on profile)
+  - Incubator mentors (mentors associated with your startup's incubator)
+  - Save/unsave mentors to favorites
+
+  View Mentor Profiles:
+  - Professional background, expertise areas, industries
+  - Session types with pricing (e.g., "Career Guidance - 30min - $50")
+  - Availability calendar
+  - Reviews and ratings
+  - Success stories, mentoring approach, startup stages served
+  - Packages (subscription bundles)
+
+  Book Sessions:
+  - Select session type
+  - Pick available time slot
+  - Pay via Razorpay
+  - Track session status (PENDING -> CONFIRMED -> COMPLETED)
+  - Cancel/reschedule with policies
+  - Submit post-session review
+
+  Subscribe to Packages:
+  - Purchase session bundles at discounted rates
+  - Track remaining sessions
+  - Priority booking
+
+  Request Long-term Mentorship:
+  - Request ongoing mentorship relationship
+  - Track mentorship milestones and goals
+  - Dedicated chat channel
+
+  Spending Analytics:
+  - Track mentor spending by startup
+
+4.11 UNIVERSAL MESSAGING
+--------------------------
+Unified chat system across the platform:
+
+Conversation Types:
+  - USER to USER (direct messages)
+  - USER to STARTUP (startup team chat)
+  - USER to PAGE (organization messages)
+  - STARTUP to STARTUP
+  - Context-aware: GENERAL, MENTOR_SESSION, MENTORSHIP, PROJECT
+
+Features:
+  - Create or get existing conversations (deduplication)
+  - Send text messages with optional attachments
+  - Reply to specific messages (threading)
+  - Edit and delete own messages
+  - Mark conversations as read
+  - Unread count tracking
+  - Real-time via Socket.IO
+
+  Special Chat Initiation:
+  - Start chat from mentor profile
+  - Start chat for specific session
+  - Start chat for mentorship relationship
+
+4.12 NOTIFICATIONS
+--------------------
+Category-based notification system:
+
+Categories:
+  - SOCIAL (likes, comments, follows)
+  - CONNECTIONS (connection requests, acceptances)
+  - MESSAGES (new messages)
+  - EVENTS (event updates, reminders)
+  - JOBS (application updates, job alerts)
+  - COMMUNITY (community activity)
+  - MENTORSHIP (session reminders, requests)
+  - SYSTEM (platform updates)
+
+Features:
+  - In-app notifications with read/unread tracking
+  - Notification preferences per category (in-app, email, push)
+  - Archive and clear notifications
+  - Unread count
+  - Actor information (who triggered the notification)
+  - Action URLs for navigation
+  - Expiry dates for time-sensitive notifications
+  - Group key for notification batching
+
+4.13 SETTINGS & PRIVACY
+--------------------------
+User-configurable settings:
+
+  Account Security:
+  - Change password
+  - Two-factor authentication (enable/disable)
+  - Login notifications
+  - Active session management
+  - Login history
+
+  Privacy Controls:
+  - Profile visibility: PUBLIC, CONNECTIONS_ONLY, PRIVATE
+  - Show/hide email and phone
+  - Show/hide location
+  - Show online status
+  - Allow connection requests (on/off)
+  - Message permissions: EVERYONE, CONNECTIONS, NO_ONE
+
+  Notification Preferences:
+  - Email notifications toggle
+  - Push notifications toggle
+  - SMS notifications toggle
+  - Per-category toggles (connections, messages, mentions, events, jobs)
+
+  Display:
+  - Language preference (default: English)
+  - Theme preference (system/light/dark)
+
+================================================================================
+5. INCUBATION PORTAL - DEEP DIVE
+================================================================================
+
+5.1 TENANT ONBOARDING
+-----------------------
+Flow for new incubator registration:
+
+  1. Check if tenant name/key is available
+  2. Admin provides: organization name, email, password
+  3. OTP verification via email
+  4. Tenant created with INACTIVE status
+  5. Admin selects subscription plan
+  6. Payment via Razorpay
+  7. On successful payment, tenant becomes ACTIVE
+  8. Admin can create organization page (linked to ecosystem)
+
+5.2 SUBSCRIPTION & BILLING
+----------------------------
+Plans:
+  - Plan types: MONTHLY, YEARLY, WEEKLY
+  - Features per plan: max users, max startups, storage limit
+  - Module-based feature gating (plan determines which modules are available)
+  - Razorpay subscription integration (recurring payments)
+  - Webhook handling for payment events
+
+Billing:
+  - Billing history tracking
+  - Invoice generation with PDF
+  - Invoice statuses: UNPAID, PAID, OVERDUE
+
+5.3 USER & ROLE MANAGEMENT
+----------------------------
+User Management:
+  - Create users with custom roles
+  - Link to ecosystem user accounts (optional)
+  - Activate/deactivate users
+  - User dropdown for assignment purposes
+  - Team member listing
+
+Role System:
+  - Create custom roles per tenant (e.g., "Program Manager", "Finance Head")
+  - Assign permissions to roles
+  - Permission model: Module + Action (e.g., Programs.CREATE, Programs.VIEW)
+  - Role-based and user-level permission overrides
+  - Admin flag bypasses role checks
+
+5.4 PROGRAM/SCHEME MANAGEMENT
+-------------------------------
+Programs are the core of the incubation portal. Each program represents an
+incubation scheme, accelerator batch, or funding program.
+
+Program Setup:
+  - Title, description, cover image, program logo
+  - Objective, benefits, guidelines
+  - Scheme type (incubation, acceleration, funding, etc.)
+  - Eligibility and non-eligibility criteria
+  - Expected outcomes
+  - External links
+  - Funding configuration:
+    - Total funding amount
+    - Funding type (GRANT, EQUITY, DEBT, CONVERTIBLE_NOTE, REVENUE_SHARE)
+    - Currency (default INR)
+    - Funding availability toggle
+
+  Custom Application Questions (SchemeQuestions):
+  - Define questions applicants must answer
+  - Types: MCQ, TEXT, LONG_TEXT, FILE_UPLOAD, DATE, NUMBER, CHECKBOX, DROPDOWN
+  - Required/optional flags
+
+  Evaluation Criteria (EvaluationQuestions):
+  - Define scoring criteria for panel evaluation
+  - Each question has weightage and scoring reference
+  - Multiple choice options with scores
+  - Ordered display
+  - Active/inactive toggle
+
+  Program Managers:
+  - Assign incubation users as program managers
+  - Managers oversee their assigned programs
+
+Application Workflow:
+  1. Startup discovers program (via ecosystem or direct link)
+  2. Startup fills application (answers scheme questions, uploads documents)
+  3. Application status: NEW
+  4. Incubation admin reviews application
+  5. Can request changes (ChangeRequest):
+     - Types: GENERAL, FILE, QUESTION
+     - Startup responds with changes (ChangeResponse)
+     - Status: PENDING -> RESOLVED/REJECTED
+  6. Can request documents (DocumentRequest):
+     - Startup uploads documents (DocumentResponse)
+  7. Application moves through stages:
+     NEW -> CHANGES_REQUESTED -> CHANGES_RECEIVED -> REVIEWED ->
+     UNDER_EVALUATION -> EVALUATED -> DOCS_REQUESTED -> DOCS_RECEIVED ->
+     VERIFIED -> ONBOARDED (or REJECTED at any stage)
+  8. Panel evaluation:
+     - Panel members assigned to program
+     - Each panel member scores application against evaluation criteria
+     - Total score calculated with weightages
+     - Evaluation summary generated
+  9. On approval: Startup onboarded to incubation portal
+
+Application History:
+  - Every status change is logged with timestamp, changed-by user, and comment
+  - Complete audit trail
+
+5.5 PANEL EVALUATION SYSTEM
+-----------------------------
+A structured evaluation workflow for startup applications:
+
+Setup:
+  - Invite panel members (from incubation users with isPanelMember flag)
+  - Assign panel members to specific programs
+  - Define evaluation questions with:
+    - Question text
+    - Weightage (importance multiplier)
+    - Multiple choice options, each with a score
+    - Scoring reference/rubric
+
+Evaluation Flow:
+  1. Panel member sees assigned applications
+  2. Reviews application details
+  3. Scores each evaluation question
+  4. Adds optional comments per question
+  5. Submits evaluation (status: DRAFT -> SUBMITTED)
+  6. Each application can be evaluated by multiple panel members
+  7. Evaluation summary aggregates all evaluators' scores
+
+Output:
+  - Per-evaluator breakdown
+  - Average scores per question
+  - Total weighted score
+  - Ranking capability
+
+5.6 STARTUP MANAGEMENT (Incubation View)
+------------------------------------------
+Incubation admins can:
+  - View all associated startups (with filters and search)
+  - See detailed startup profiles
+  - Track startup-tenant association status: ONBOARDED, ACTIVE, SUSPENDED, OFFBOARDED
+  - Track startup-program association status: ACTIVE, COMPLETED, OFFBOARDED, REMOVED
+  - Search ecosystem startups to add to programs
+  - Create new startups and add directly to programs
+  - View startup's applications across programs
+
+5.7 OFFICE SPACE MANAGEMENT (Provider Side)
+---------------------------------------------
+Incubation portals can manage office spaces they offer:
+
+Office Spaces:
+  - Name, location, size (sq ft), type, capacity
+  - Status: AVAILABLE, OCCUPIED, MAINTENANCE, INACTIVE
+  - Description, amenities, images
+  - Owner type: TENANT (incubator-owned)
+  - Visibility: PUBLIC, TENANTS_ONLY, PRIVATE
+  - Verification status
+
+Pricing:
+  - Multiple pricing options per office: HOURLY, DAILY, WEEKLY, MONTHLY, YEARLY
+  - Amount, currency (INR), security deposit
+  - Minimum duration, discount percentage
+
+Request Management:
+  - Startups request office space
+  - Admins approve/reject requests
+  - On approval: allocation created
+  - Allocation tracking: start date, end date, status
+
+Booking System:
+  - Direct bookings with pricing selection
+  - Payment tracking (Razorpay integration)
+  - Booking statuses: PENDING_PAYMENT, CONFIRMED, ACTIVE, COMPLETED,
+    CANCELLED, EXPIRED
+  - Security deposit management: NOT_REQUIRED, HELD, RELEASED, FORFEITED
+  - Calendar view for availability
+
+Payment Management:
+  - Rent payments, security deposits, additional charges
+  - Razorpay order/payment/signature verification
+  - Invoice generation
+  - Refund handling
+
+Dashboard:
+  - Occupancy rates
+  - Revenue tracking
+  - Request statistics
+
+5.8 FACILITY MANAGEMENT
+-------------------------
+Facilities are shared resources within the incubation center:
+
+Facility Types:
+  - Meeting rooms, labs, event spaces, co-working areas, etc.
+  - Categories for organization
+  - Capacity, amenities, images, location
+
+Availability:
+  - Day-of-week based availability
+  - Time slots with start/end times
+  - Multiple units per facility
+  - Slot-based booking system
+
+Booking:
+  - Browse available facilities
+  - Check availability for specific date/time
+  - Book with reason/comment
+  - Booking statuses: PENDING, APPROVED, REJECTED, CANCELED, COMPLETED, RESCHEDULED
+  - Admin approval workflow
+  - Calendar view
+  - Usage statistics
+
+5.9 TASK MANAGEMENT
+---------------------
+Project management for incubation teams and startups:
+
+Task Properties:
+  - Title, description
+  - Priority: LOW, MEDIUM, HIGH, CRITICAL
+  - Status: PENDING, IN_PROGRESS, IN_REVIEW, BLOCKED, COMPLETED
+  - Team context: INCUBATION (for incubation team) or STARTUP (for startup teams)
+  - Creator, assignee
+  - Due date, start date, completion date
+  - Labels/tags
+  - Order index for kanban-style boards
+  - Archive support
+
+Subtasks:
+  - Checklist items within a task
+  - Toggle completion
+  - Reorder support
+
+Attachments:
+  - File uploads via S3
+  - File metadata (name, type, size)
+
+Comments:
+  - Discussion thread on tasks
+  - Edit and delete comments
+
+Activity Log:
+  - All changes tracked (status changes, assignments, edits)
+  - Actor, field changed, old value, new value
+
+Views:
+  - My tasks (assigned to me)
+  - Created by me
+  - Overdue tasks
+  - Task statistics (counts by status)
+  - Team members for assignment
+
+5.10 ANNOUNCEMENT SYSTEM
+--------------------------
+Internal communication tool for incubation portals:
+
+Announcement Properties:
+  - Title, content (rich text)
+  - Priority: LOW, MEDIUM, HIGH, URGENT
+  - Visibility: PUBLIC, INTERNAL, TARGETED
+  - Scope: TENANT_WIDE, PROGRAM_SPECIFIC, STARTUP_SPECIFIC, MENTOR_SPECIFIC, CUSTOM
+  - Program association (optional)
+  - Publish/unpublish control
+  - Pin/unpin (for important announcements)
+  - Archive/restore
+
+Targeting:
+  - Target specific: PROGRAM, STARTUP, MENTOR, INCUBATION_USER, USER, ROLE
+  - Exclusion list (exclude specific targets)
+  - Granular recipient control
+
+Attachments:
+  - File uploads with metadata
+
+Tracking:
+  - Read tracking (who read, when)
+  - Read statistics
+  - Activity log (created, updated, published, pinned, etc.)
+
+Email Integration:
+  - Send announcement via email to targeted recipients
+  - EJS email templates
+
+5.11 MENTOR MANAGEMENT (Incubation Side)
+------------------------------------------
+Incubators can build a mentor network:
+
+Mentor Discovery:
+  - Browse available mentors from the ecosystem
+  - View mentor profiles, expertise, pricing
+
+Association Management:
+  - Invite mentors to associate with incubator
+  - Mentors can also apply to associate
+  - Association statuses: PENDING, ACTIVE, DECLINED, SUSPENDED, ENDED
+
+  Payment Models for associations:
+  - PER_SESSION: Pay per session at agreed rate
+  - RETAINER: Monthly retainer with hour limit
+  - SUBSIDIZED: Incubator subsidizes mentor fees for startups
+  - FREE: Pro bono arrangement
+
+  Association Details:
+  - Agreed rate, retainer amount/hours
+  - Incubator share percentage
+  - Exclusivity flag
+  - Auto-approve bookings option
+  - Hours used tracking (monthly reset)
+
+Session Monitoring:
+  - View all sessions across associated mentors
+  - Session details and status
+  - Usage analytics by mentor
+
+Analytics:
+  - Mentor usage by month/year
+  - Spending analytics
+  - Per-startup mentor usage
+
+5.12 FUNDING MANAGEMENT
+--------------------------
+Comprehensive funding flow for incubation programs:
+
+Funding Sources:
+  - Track where money comes from
+  - Source types: GOVERNMENT_GRANT, CSR, INTERNAL, ANGEL_FUND,
+    VENTURE_FUND, CORPORATE, DONATION, OTHER
+  - Amount, currency, dates, reference
+  - Source documents (upload receipts, approvals)
+
+Program Funding Allocation:
+  - Allocate funds from sources to specific programs
+  - Track allocated vs available amounts
+  - Prevent over-allocation
+
+Funding Disbursement:
+  - Disburse funds to startups within programs
+  - Disbursement types: GRANT, EQUITY, LOAN, PRIZE, SCHOLARSHIP,
+    REIMBURSEMENT, OPERATING_EXPENSE
+  - Statuses: PENDING, APPROVED, DISBURSED, CANCELLED, ON_HOLD
+  - Tranche-based disbursement (numbered tranches)
+  - Milestone-linked disbursements
+  - Supporting documents
+
+Startup Funding Requests:
+  - Startups can request funding from their program
+  - Request with amount, note, supporting document
+  - Review workflow: PENDING -> APPROVED/REJECTED
+  - Admin sets approved amount (may differ from requested)
+  - Approved requests auto-create disbursements
+  - Track disbursement status
+
+Funding Portfolio:
+  - Overview of all funding activity per tenant
+  - Per-program breakdown
+  - Per-startup breakdown
+  - History with audit trail
+
+Funding History:
+  - All funding actions logged
+  - Action types: ALLOCATION_CREATED, DISBURSEMENT_CREATED,
+    DISBURSEMENT_APPROVED, DISBURSEMENT_CANCELLED, etc.
+  - Old value, new value, notes
+
+5.13 PUBLIC REPOSITORY / API
+-------------------------------
+Data sharing system for incubation portals:
+
+Repository:
+  - Create named data repositories
+  - Add structured items (JSON data)
+  - Define schema/structure
+
+API Access:
+  - Each repository gets a unique API key
+  - External systems can access data via REST API
+  - Rate limiting by IP and user agent
+  - API endpoints: get data (paginated), get schema, get single item
+  - Regenerate API keys
+  - Access logging (who accessed, when, from where)
+
+Statistics:
+  - Total items, total access count
+  - Access patterns
+
+5.14 NOTIFICATIONS (Incubation Portal)
+----------------------------------------
+Similar to ecosystem notifications but scoped to incubation context:
+  - In-app notifications
+  - Unread count
+  - Preferences management
+  - Mark as read (individual and bulk)
+  - Archive and clear
+
+================================================================================
+6. STARTUP PORTAL - DEEP DIVE
+================================================================================
+
+The Startup Portal is the startup's view into the incubation system. Startups
+that are onboarded to an incubator access features through this portal.
+
+6.1 PROGRAM ACCESS
+--------------------
+  - View available programs from associated incubators
+  - Get tenant dropdown (list of incubators startup is associated with)
+  - View program details
+  - Submit applications with scheme answers
+  - Respond to change requests from incubator
+  - Respond to document requests
+  - View application history and status
+  - Submit funding requests
+
+6.2 OFFICE SPACE (Receiver Side)
+---------------------------------
+  - Browse available office spaces
+  - Submit office requests
+  - View request status
+  - View current office allocation
+  - View office history
+  - Make payments via Razorpay
+  - View payment history
+  - Dashboard with usage stats
+
+6.3 FACILITY ACCESS
+---------------------
+  - List available facilities at incubator
+  - Check availability for dates/times
+  - Submit booking requests
+  - View booking status (pending/approved/rejected)
+  - View upcoming and past bookings
+
+6.4 TASK MANAGEMENT
+---------------------
+  - Same task system as incubation but scoped to startup team
+  - Create, assign, track tasks within startup team
+  - Subtasks, attachments, comments
+  - Status workflow
+
+6.5 ANNOUNCEMENTS (Received)
+------------------------------
+  - View announcements sent by incubator
+  - Filter by read/unread
+  - Mark as read
+  - View unread count
+  - Also: create and manage startup's own internal announcements
+
+6.6 NOTIFICATIONS
+-------------------
+  - Notification system similar to ecosystem
+  - Scoped to incubation-related activities
+
+================================================================================
+7. MENTOR PORTAL - DEEP DIVE
+================================================================================
+
+Dedicated portal for mentors to manage their mentoring practice:
+
+7.1 PROFILE MANAGEMENT
+------------------------
+  - Full profile CRUD (title, company, expertise, industries, bio)
+  - Headline, mentoring approach, success stories
+  - Background summary, startup stages they serve
+  - Profile visibility: PUBLIC, CONNECTIONS_ONLY, PRIVATE
+  - Featured status (admin-controlled)
+  - Verification status: PENDING, VERIFIED, SUSPENDED
+
+  Booking Settings:
+  - Minimum booking notice (hours, default: 24)
+  - Max bookings per day
+  - Auto-confirm toggle (default: manual confirmation)
+  - Buffer between sessions (default: 15 min)
+  - Free cancellation window (default: 24 hours)
+
+  Statistics (visible on profile):
+  - Total sessions, completed sessions
+  - Successful exits, startups helped
+  - Response time (hours)
+  - Rating and review count
+
+7.2 SESSION TYPES
+-------------------
+  - Define session offerings (e.g., "Career Guidance", "Technical Review")
+  - Duration in minutes
+  - Price and currency
+  - Active/inactive toggle
+  - Description
+
+7.3 AVAILABILITY MANAGEMENT
+------------------------------
+  - Set weekly recurring availability
+  - Day-of-week based (Monday through Sunday)
+  - Start time and end time per slot
+  - Multiple slots per day
+  - Active/inactive toggle per slot
+  - Quick availability update
+  - Calendar view
+
+7.4 SESSION MANAGEMENT
+------------------------
+  - View and manage booked sessions
+  - Confirm or decline pending sessions
+  - Cancel sessions (as mentor or mentee)
+  - Reschedule sessions
+  - Add pre-session and post-session notes
+  - Action items tracking
+  - Complete sessions
+  - Extend session duration (up to 30 min, free or paid)
+  - Mark no-shows
+  - Submit reviews
+
+  Session Payment Details:
+  - Gross amount, platform fee (default 10%), mentor payout
+  - Payment by: USER, STARTUP, INCUBATOR
+  - Incubator share (if associated)
+  - Refund handling for cancellations
+
+  Video Sessions:
+  - Jitsi-based video conferencing
+  - Auto-generated meeting room and URL
+  - Recording support (premium feature)
+  - Recording consent tracking
+  - Session recording management
+
+7.5 PACKAGES
+--------------
+  - Create subscription packages (bundles of sessions)
+  - Package types: BASIC, STANDARD, PREMIUM
+  - Sessions included, validity period (days)
+  - Pricing with optional discount
+  - Features list (e.g., "includes priority booking", "includes chat")
+  - Active/inactive management
+  - View package subscribers
+
+7.6 MENTORSHIP RELATIONSHIPS
+-------------------------------
+  - Accept/decline mentorship requests
+  - Update mentorship status: PENDING, ACTIVE, PAUSED, COMPLETED, DECLINED
+  - End mentorships with reason
+  - Engagement types: ONE_TIME, SHORT_TERM, LONG_TERM, ONGOING
+  - Meeting frequency setting
+  - Objectives and goals tracking
+  - Equity-based mentorship option (equity %, notes)
+  - Linked chat conversation
+
+  Milestones:
+  - Create milestones within mentorships
+  - Track progress (0-100%)
+  - Status: PENDING, IN_PROGRESS, COMPLETED, CANCELLED, OVERDUE
+  - Completion notes
+
+7.7 INCUBATOR ASSOCIATIONS
+-----------------------------
+  - View and manage incubator associations
+  - Apply to associate with incubators
+  - Respond to invitations
+  - End associations with reason
+  - Track usage per association (hours used monthly/total)
+
+7.8 EARNINGS & PAYOUTS
+-------------------------
+  - Earnings summary (total earned, platform fees, net amount)
+  - Earnings history (per session)
+  - Pending settlements
+  - Analytics (monthly/quarterly breakdown)
+  - Withdrawal requests
+  - Payout account management (bank account or UPI)
+
+  Earning Details per Session:
+  - Gross amount
+  - Platform fee (percentage-based, default 15%)
+  - GST and TDS amounts
+  - Net amount
+  - Source: DIRECT, INCUBATOR
+  - Payment status, Razorpay references
+  - Invoice generation
+
+7.9 DASHBOARD
+--------------
+  - Overview metrics: total sessions, active mentees, total earnings
+  - Upcoming sessions
+  - Recent activity
+  - Performance analytics
+  - Quick actions
+
+7.10 ANNOUNCEMENTS (Received)
+-------------------------------
+  - View announcements from associated incubators
+  - Filter by incubator
+  - Unread count
+
+================================================================================
+8. INVESTOR & VC PORTAL - DEEP DIVE
+================================================================================
+
+8.1 INVESTOR FEATURES (Individual/Angel)
+------------------------------------------
+Profile:
+  - Investor type: INDIVIDUAL, FAMILY_OFFICE, CORPORATE
+  - Firm name and logo (optional)
+  - Investment stages (Pre-Seed through Series D+)
+  - Sectors, geographies
+  - Check size range (min/max)
+  - Total and active investments
+  - Portfolio value
+  - Investment thesis
+  - Previous exits
+  - Accredited investor flag
+
+Deal Flow Pipeline:
+  SOURCED -> SCREENING -> DUE_DILIGENCE -> IC_REVIEW -> TERM_SHEET ->
+  NEGOTIATION -> INVESTED (or PASSED at any stage)
+
+  Each deal tracks:
+  - Startup info (name, logo, sector, stage)
+  - Ask amount
+  - Source, assigned team members
+  - Score, priority level (LOW, MEDIUM, HIGH, CRITICAL)
+  - Follow-up dates
+  - Pass/invest date and reasons
+
+  Deal Activities:
+  - Notes (general, due diligence, IC meeting, term sheet, legal)
+  - Meetings (intro call, pitch, follow-up, IC meeting, board meeting)
+  - Documents (pitch deck, term sheet, due diligence, legal, financial)
+
+Portfolio Management:
+  - Track investments (startup, amount, date, ownership %)
+  - Board seat tracking
+  - Current valuation
+  - Status: ACTIVE, EXITED, WRITTEN_OFF
+  - Exit tracking (date, amount, type, IRR, multiple)
+
+Investment Syndicates:
+  - Create syndicates for co-investment
+  - Target amount, raised amount
+  - Closing date, terms
+  - Minimum/maximum investment per member
+  - Member management (commitment, payment tracking)
+  - Status: OPEN, CLOSED, INVESTING, FULLY_DEPLOYED, LIQUIDATING
+
+8.2 VC FIRM FEATURES
+-----------------------
+VC Firm Setup:
+  - Firm profile (name, logo, description, website)
+  - AUM, investment stages, sectors, geographies
+  - Check size range
+  - Verification status
+
+Fund Management:
+  - Multiple funds per firm
+  - Vintage year, target size, raised/deployed amounts
+  - Strategy, focus areas
+  - LP tracking
+  - Management fee and carry percentages
+  - Fund status: FUNDRAISING, INVESTING, FULLY_DEPLOYED, HARVESTING, LIQUIDATED
+
+Team Management:
+  - Add team members with VC roles:
+    MANAGING_PARTNER, PARTNER, PRINCIPAL, VP,
+    SENIOR_ASSOCIATE, ASSOCIATE, ANALYST
+  - Granular permissions per member:
+    - Fund management, LP relations, team management
+    - Deal flow (full access vs sourcing only)
+    - IC voting rights
+    - Final approval authority
+    - Portfolio access, due diligence, research
+
+Deal Flow (Firm Level):
+  - Same pipeline stages as individual investors
+  - IC score tracking
+  - Next action and date
+  - Term sheet sent date
+  - Close tracking
+  - Deal assignments to team members
+
+Portfolio Companies:
+  - Track portfolio companies per firm
+  - Fund association
+  - Investment details (date, amounts)
+  - Lead investor flag
+  - Board seat tracking
+
+================================================================================
+9. FREELANCER PORTAL - DEEP DIVE
+================================================================================
+
+Profile:
+  - Title, tagline, hourly rate
+  - Availability: AVAILABLE, BUSY, NOT_AVAILABLE
+  - Experience, portfolio links
+  - Categories, languages, timezone
+  - Rating, review count
+  - Project statistics
+
+Gig Requests:
+  - Startups can send gig requests to freelancers
+  - Request includes: project title, description, budget range, timeline, skills
+  - Freelancer can accept, counter-offer, or decline
+  - Counter-offers: modified budget, timeline, and notes
+  - Accepted requests convert to projects
+
+Projects:
+  - Full project management
+  - Client types: STARTUP, COMPANY, INDIVIDUAL
+  - Payment type: FIXED, HOURLY, MILESTONE_BASED, RETAINER
+  - Progress tracking (0-100%)
+  - Milestone-based delivery:
+    - Define milestones with amounts and due dates
+    - Status: PENDING, IN_PROGRESS, SUBMITTED, REVISION, APPROVED, PAID
+    - Feedback and attachments per milestone
+
+Contracts:
+  - Formal contract creation
+  - Terms, scope, deliverables
+  - Dual-signing (freelancer + client)
+  - Contract statuses: DRAFT, PENDING_SIGNATURES, ACTIVE, COMPLETED,
+    TERMINATED, DISPUTED
+
+Earnings:
+  - Per-project earning tracking
+  - Platform fee deduction (15%)
+  - GST and TDS tracking
+  - Razorpay payment integration
+  - Invoice generation
+  - Settlement tracking
+
+Payout:
+  - Bank account or UPI payout accounts
+  - Withdrawal requests
+  - Razorpay payout processing
+  - Withdrawal statuses: PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
+
+Reviews:
+  - Client reviews with ratings
+  - Skill-specific feedback
+  - Verified review flag
+
+================================================================================
+10. SUPER ADMIN PORTAL - DEEP DIVE
+================================================================================
+
+EcoSync's internal administration portal:
+
+10.1 AUTHENTICATION
+---------------------
+  - Admin signup (restricted)
+  - Login/logout with JWT
+  - Profile management
+  - Roles: ADMIN, MARKETING, MANAGER, RELATIONSHIP_MANAGER
+
+10.2 MODULE MANAGEMENT
+------------------------
+  - Create platform modules (e.g., "Mentorship", "Events", "Job Board")
+  - Each module has: name, key, description, active status
+  - Module permissions (fine-grained actions per module)
+  - Toggle module availability
+
+10.3 PLAN MANAGEMENT
+----------------------
+  - Create subscription plans (for incubation tenants)
+  - Plan details: name, price, type (monthly/yearly)
+  - Max users, max startups, storage limits
+  - Assign modules to plans (controls feature access per tier)
+  - Update plan details and module assignments
+  - View plans by type
+
+10.4 TENANT OVERSIGHT
+-----------------------
+  - View all registered tenants
+  - Search and filter tenants
+  - View tenant details and subscription status
+  - View all invoices across tenants
+
+10.5 SUPPORT CHAT
+-------------------
+  - Real-time chat with tenant admins
+  - View all active chats
+  - Search tenant admins for outreach
+  - Chat history per tenant
+
+================================================================================
+11. CROSS-PLATFORM FEATURES
+================================================================================
+
+11.1 FILE UPLOADS (S3)
+------------------------
+All file uploads across the platform use AWS S3:
+  - Pre-signed URL generation
+  - Tenant-specific folder isolation
+  - Supported across: profile photos, documents, attachments, media
+
+11.2 REAL-TIME FEATURES (Socket.IO)
+--------------------------------------
+Four socket namespaces:
+  1. Chat Socket - Real-time messaging for tenant-admin chat
+  2. Universal Chat Socket - Real-time messaging for ecosystem chat
+  3. Notification Socket - Real-time push notifications
+  4. Event Live Socket - Real-time event streaming
+
+11.3 EMAIL SYSTEM
+-------------------
+EJS-based email templates for:
+  - OTP verification (signup, forgot password)
+  - Password change/reset confirmations
+  - Event invitations, registrations, reminders, cancellations, updates
+  - Job alerts, application confirmations, status updates
+  - Community invites, join approvals, bans, warnings
+  - Announcement emails
+  - Session/mentorship notifications
+
+11.4 CRON JOBS
+----------------
+Scheduled tasks for:
+  - Session reminders (24h and 1h before)
+  - Event reminders
+  - Subscription expiry checks
+  - Job alert digests
+
+11.5 RATE LIMITING
+--------------------
+  - IP-based rate limiting on public APIs
+  - Configurable windows and max requests
+
+11.6 REDIS CACHING
+---------------------
+  - Tenant data caching (24-hour TTL)
+  - Session token management
+  - Performance optimization for frequent lookups
+
+================================================================================
+12. DATA RELATIONSHIPS & ENTITY MAP
+================================================================================
+
+12.1 CORE ENTITY RELATIONSHIPS
+---------------------------------
+
+  User (Ecosystem)
+    |-- has many UserRoles (STUDENT, PROFESSIONAL, FREELANCER, FOUNDER, etc.)
+    |-- has one of each: StudentProfile, ProfessionalProfile, FreelancerProfile,
+    |   InvestorProfile, VCProfile, MentorProfile
+    |-- has many: Skills, Education, Experience, Certifications, Projects
+    |-- has many: Posts, Comments, Likes, Shares, Bookmarks
+    |-- has many: Followers, Following, Connections
+    |-- has many: CommunityMemberships
+    |-- has many: EventRegistrations
+    |-- has many: JobApplications
+    |-- has many: Notifications, NotificationPreferences
+    |-- has many: Conversations, Messages
+    |-- has many: StartupMemberships (can be part of multiple startups)
+    |-- has many: PageMemberships, PageFollows
+    |-- has many: IncubationProfiles (can be staff at multiple incubators)
+    |-- has one: GamificationProfile
+    |-- has one: UserSettings, UserLocation, UserSocialLinks
+    |-- has one: FeedPreferences, CofounderPreference
+
+  Startup
+    |-- has one Page (organization page in ecosystem)
+    |-- has many: Members (with roles)
+    |-- has many: Applications (to programs)
+    |-- has many: TenantAssociations (associated with incubators)
+    |-- has many: ProgramAssociations (in specific programs)
+    |-- has many: Files, FundingRounds, Milestones, PitchDecks
+    |-- has many: InvestorUpdates, Metrics
+    |-- has many: Jobs, OfficeAllocations, OfficeRequests, FacilityBookings
+    |-- has many: MentorSessions, Mentorships, PackageSubscriptions
+    |-- has many: FundingDisbursements, FundingRequests
+
+  Page (Organization)
+    |-- belongs to Creator (User)
+    |-- has many: Members (OWNER, ADMIN, EDITOR, MEMBER)
+    |-- has many: Followers
+    |-- has many: Posts, Events, Jobs
+    |-- can be linked to: Startup, Tenant
+    |-- type determines fields: STARTUP, COMPANY, VC_FIRM, INSTITUTION, etc.
+
+  Tenant (Incubator)
+    |-- has one: Plan (subscription)
+    |-- has many: Subscriptions, BillingHistory, Invoices
+    |-- has many: IncubationUsers (staff)
+    |-- has many: Roles (custom roles)
+    |-- has many: Programs
+    |-- has many: StartupAssociations, ProgramAssociations
+    |-- has many: OfficeSpaces, Facilities
+    |-- has many: MentorAssociations
+    |-- has many: FundingSources, FundingDisbursements
+    |-- has one: Chat (support chat with super admin)
+    |-- has one: Page (linked organization page)
+    |-- has many: PublicRepositories
+
+  Program
+    |-- belongs to Tenant
+    |-- has many: SchemeQuestions (application form)
+    |-- has many: EvaluationQuestions (panel scoring)
+    |-- has many: Applications, Announcements
+    |-- has many: ProgramManagers, PanelAssignments
+    |-- has many: StartupAssociations
+    |-- has many: FundingAllocations, FundingDisbursements, FundingRequests
+
+  MentorProfile
+    |-- belongs to User
+    |-- has many: SessionTypes, Availability slots
+    |-- has many: Sessions, Reviews, Content
+    |-- has many: Packages
+    |-- has many: IncubatorAssociations
+    |-- has many: Mentorships
+    |-- has many: CalendarSyncs
+
+12.2 KEY JUNCTION TABLES
+--------------------------
+  - StartupTenantAssociation: Links startups to incubators
+  - StartupProgramAssociation: Links startups to programs (with funding data)
+  - IncubatorMentorAssociation: Links mentors to incubators
+  - StartupMember: Links users to startups (with roles)
+  - PageMember: Links users to organization pages
+  - CommunityMember: Links users to communities
+  - ProgramManagerAssignment: Links users to managed programs
+  - ProgramPanelAssignment: Links users to programs for evaluation
+
+================================================================================
+13. KEY WORKFLOWS & USER JOURNEYS
+================================================================================
+
+13.1 STARTUP FOUNDER JOURNEY
+------------------------------
+  1. Sign up on ecosystem platform
+  2. Select "Founder" as primary role
+  3. Create startup Page
+  4. Build profile (team, pitch deck, metrics)
+  5. Discover incubators via Networking
+  6. Apply to incubation programs
+  7. Go through application review process
+  8. Get onboarded to incubator
+  9. Access incubation portal features (office, facilities, tasks)
+  10. Book mentor sessions
+  11. Receive funding disbursements
+  12. Post updates, attend events, hire via job board
+  13. Network with other founders, investors, professionals
+
+13.2 MENTOR JOURNEY
+---------------------
+  1. Sign up on ecosystem platform
+  2. Select "Mentor" as role
+  3. Complete mentor profile (expertise, pricing, availability)
+  4. Create session types
+  5. Set weekly availability
+  6. Get discovered by startups and professionals
+  7. Receive and confirm session bookings
+  8. Conduct sessions via Jitsi video
+  9. Build mentorship relationships
+  10. Associate with incubators for startup access
+  11. Track earnings and withdraw payments
+  12. Create packages for subscription-based mentoring
+
+13.3 INVESTOR JOURNEY
+-----------------------
+  1. Sign up on ecosystem platform
+  2. Select "Investor" role
+  3. Complete investor profile
+  4. Discover startups via Networking
+  5. Add to deal flow pipeline
+  6. Move through stages (screen, diligence, IC, terms)
+  7. Track portfolio investments
+  8. Create syndicates for co-investment
+  9. Attend events and network
+
+13.4 INCUBATOR ADMIN JOURNEY
+-------------------------------
+  1. Register incubator on incubation portal
+  2. Verify email and set up tenant
+  3. Subscribe to a plan
+  4. Configure: create roles, invite users
+  5. Create programs with application forms
+  6. Set up evaluation criteria
+  7. Manage office spaces and facilities
+  8. Invite/associate mentors
+  9. Set up funding sources
+  10. Review incoming startup applications
+  11. Assign panel evaluations
+  12. Onboard approved startups
+  13. Manage ongoing operations (tasks, announcements, funding)
+  14. Monitor via dashboards and analytics
+
+13.5 PROFESSIONAL/STUDENT JOURNEY
+------------------------------------
+  1. Sign up, select role
+  2. Build profile (education, experience, skills)
+  3. Browse and apply for jobs
+  4. Set up job alerts
+  5. Join communities
+  6. Attend events
+  7. Post content and build network
+  8. Connect with professionals and founders
+  9. Book mentor sessions for career guidance
+  10. Discover co-founder opportunities (if interested)
+
+================================================================================
+14. PAYMENT & SUBSCRIPTION ARCHITECTURE
+================================================================================
+
+All payments are processed through Razorpay (Indian payment gateway):
+
+14.1 PAYMENT SCENARIOS
+------------------------
+
+  Incubation Subscriptions:
+  - Recurring subscription (Razorpay subscription API)
+  - Plan-based pricing
+  - Webhook for payment events
+
+  Mentor Sessions:
+  - One-time Razorpay order
+  - Order creation -> Payment -> Signature verification
+  - Platform fee deduction
+  - Mentor payout tracking
+
+  Mentor Packages:
+  - One-time payment for session bundle
+  - Same Razorpay flow
+
+  Event Tickets:
+  - One-time payment for ticket purchase
+  - Refund support for cancellations
+
+  Office Space:
+  - Booking payments (rent, security deposit)
+  - Razorpay order flow
+  - Refund handling
+
+  Freelancer Payments:
+  - Milestone-based payments
+  - Platform fee deduction
+  - Payout to freelancer bank/UPI
+
+14.2 PAYMENT STATUSES
+-----------------------
+  PENDING -> CAPTURED -> SETTLED (or FAILED/REFUNDED)
+
+14.3 PAYOUT SYSTEM
+---------------------
+  For mentors and freelancers:
+  - Track earnings per transaction
+  - Platform fee, GST, TDS deductions
+  - Withdrawal requests
+  - Bank transfer or UPI payout via Razorpay
+  - Payout account verification
+
+================================================================================
+15. NOTIFICATION SYSTEM
+================================================================================
+
+Multi-channel notification delivery:
+
+15.1 NOTIFICATION TYPES
+-------------------------
+  - SESSION_BOOKED, SESSION_CONFIRMED, SESSION_CANCELLED, SESSION_REMINDER
+  - MENTORSHIP_REQUEST, MENTORSHIP_ACCEPTED, MENTORSHIP_DECLINED
+  - APPLICATION_RECEIVED, APPLICATION_STATUS_CHANGED
+  - CONNECTION_REQUEST, CONNECTION_ACCEPTED
+  - TASK_ASSIGNED, TASK_STATUS_CHANGED, TASK_COMMENT
+  - ANNOUNCEMENT_PUBLISHED, ANNOUNCEMENT_TARGETED
+  - EVENT_REMINDER, EVENT_REGISTRATION, EVENT_CANCELLED
+  - JOB_APPLICATION, JOB_STATUS_UPDATE
+  - COMMUNITY_INVITE, COMMUNITY_POST, COMMUNITY_MENTION
+  - FUNDING_DISBURSEMENT, FUNDING_REQUEST
+  - SYSTEM_NOTIFICATION
+
+15.2 DELIVERY CHANNELS
+------------------------
+  - In-app (real-time via Socket.IO)
+  - Email (EJS templates via Nodemailer)
+  - Push notifications (future)
+  - SMS (future)
+
+15.3 USER PREFERENCES
+-----------------------
+  - Per-category toggle for each channel
+  - Global enable/disable per channel
+
+================================================================================
+16. GAMIFICATION SYSTEM
+================================================================================
+
+Points and achievement system to drive engagement:
+
+16.1 GAMIFICATION PROFILE
+---------------------------
+  - Total points earned
+  - Current level (starts at 1)
+  - Current streak and longest streak
+  - Last activity tracking
+
+16.2 ACHIEVEMENTS
+-------------------
+  - Named achievements with descriptions
+  - Categories: PROFILE, NETWORKING, CONTENT, MENTORSHIP, EVENTS, JOBS, COMMUNITY
+  - Tiers: BRONZE, SILVER, GOLD, PLATINUM
+  - Points awarded on completion
+  - Criteria (JSON-based rules)
+  - Progress tracking (0-100%)
+
+16.3 POINT TRANSACTIONS
+--------------------------
+  - Points for actions: POST_CREATED, COMMENT_ADDED, EVENT_ATTENDED,
+    SESSION_COMPLETED, CONNECTION_MADE, etc.
+  - Transaction log with reference to triggering action
+
+16.4 BADGES
+--------------
+  - Named badges with descriptions and icons
+  - Category-based organization
+
+================================================================================
+17. DESIGN CONSIDERATIONS & RECOMMENDATIONS
+================================================================================
+
+17.1 NAVIGATION COMPLEXITY
+-----------------------------
+The platform has TWO completely separate products that need distinct navigation:
+
+  Ecosystem Platform:
+  - Primary navigation: Feed, Network, Jobs, Events, Communities, Messages
+  - Secondary: Profile, Mentor Marketplace, Notifications, Settings
+  - Role-based sections: Mentor Dashboard, Investor Dashboard, etc.
+  - Page management (for organization pages)
+
+  Incubation Portal:
+  - Primary navigation: Dashboard, Programs, Startups, Tasks
+  - Secondary: Office Spaces, Facilities, Mentors, Funding, Announcements
+  - Admin: Users, Roles, Settings, Subscription
+  - Each tenant has its own URL (subdomain or custom domain)
+
+17.2 ROLE-BASED UI ADAPTATION
+---------------------------------
+The ecosystem platform must adapt based on user roles:
+  - A FOUNDER sees startup management, program applications, mentor booking
+  - A MENTOR sees session management, availability, earnings
+  - An INVESTOR sees deal flow, portfolio, syndicates
+  - A STUDENT sees internships, career tools
+  - Users can have MULTIPLE roles -- the UI should allow switching context
+
+  Recommendation: Use a role switcher or combined dashboard that surfaces
+  relevant features per active role.
+
+17.3 MULTI-TENANCY UI CONSIDERATIONS
+---------------------------------------
+  - Each incubator portal should feel like its own product
+  - Tenant logo, branding colors should be customizable
+  - The tenantKey in subdomain identifies the organization
+  - Login flow requires tenant identification first
+  - Data is completely isolated between tenants
+
+17.4 KEY UX PATTERNS TO CONSIDER
+-----------------------------------
+
+  Application Pipeline (Kanban):
+  - Startup applications move through stages
+  - Visual pipeline view would be highly effective
+  - Similar to hiring pipeline in job management
+
+  Calendar Views:
+  - Mentor availability
+  - Session scheduling
+  - Event calendar
+  - Facility booking calendar
+  - Office space availability
+
+  Dashboard Patterns:
+  - Incubation admin dashboard (key metrics, recent activity)
+  - Mentor dashboard (upcoming sessions, earnings)
+  - Startup dashboard (application status, tasks)
+  - Investor dashboard (deal pipeline, portfolio)
+  - Community analytics dashboard
+
+  Chat/Messaging:
+  - Conversation list with unread badges
+  - Message threading
+  - Context-aware chat (mentor session, mentorship)
+  - Real-time indicators
+
+  Notification Center:
+  - Bell icon with unread count
+  - Category-based grouping
+  - Action buttons for quick response
+  - Mark as read/archive
+
+  Profile Completeness:
+  - Progress indicators for profile completion
+  - Guided setup flows for new users
+  - Stage-based onboarding
+
+17.5 DATA-HEAVY VIEWS
+------------------------
+Several views involve large data tables that need thoughtful UX:
+  - Program applications list (with status filters, search)
+  - Job applications pipeline
+  - Event registrations
+  - Community members list
+  - Mentor sessions history
+  - Earnings/payout history
+  - Funding disbursements
+  - Office bookings
+  - Task boards (kanban or list view)
+
+  Recommendation: Use consistent table patterns with:
+  - Search and filter bars
+  - Status badges with color coding
+  - Pagination
+  - Sort options
+  - Bulk actions where applicable
+  - Export functionality
+
+17.6 MOBILE CONSIDERATIONS
+-----------------------------
+  - The ecosystem platform (feed, networking, messaging, events) is heavily
+    mobile-first in user behavior
+  - The incubation portal is more desktop-oriented (admin operations)
+  - Mentor booking and session joining should work well on mobile
+  - Push notifications for time-sensitive actions (session reminders, etc.)
+
+17.7 PAYMENT UX
+-----------------
+  - Razorpay checkout integration (modal/redirect)
+  - Payment status indicators
+  - Invoice download
+  - Subscription management (upgrade/downgrade/cancel)
+  - Earnings dashboard with charts
+
+17.8 REAL-TIME FEATURES
+--------------------------
+  - Chat messages (instant delivery)
+  - Notifications (badge updates)
+  - Live event streaming
+  - Online status indicators
+
+17.9 FORM COMPLEXITY
+-----------------------
+Several complex forms exist:
+  - Program creation (many fields, file uploads)
+  - Event creation (multi-step with tickets, speakers, timeline)
+  - Job posting (with screening questions)
+  - Startup application (dynamic questions from scheme)
+  - Mentor profile setup
+  - Investor deal flow entry
+
+  Recommendation: Use multi-step forms with save-as-draft capability
+  for complex creation flows.
+
+17.10 CONTENT MODERATION UI
+------------------------------
+  - Moderation queue for communities
+  - Report review workflow
+  - Ban/mute member actions
+  - Content approval flow (posts in moderated communities)
+  - Activity logs for audit
+
+17.11 ANALYTICS & REPORTING
+------------------------------
+Several analytics views are needed:
+  - Profile insights (views, engagement)
+  - Page analytics (followers, engagement)
+  - Event analytics (registrations, attendance)
+  - Community analytics (growth, engagement, retention)
+  - Hiring dashboard (application funnel)
+  - Mentor analytics (sessions, earnings, ratings)
+  - Funding analytics (sources, allocations, disbursements)
+  - Facility usage statistics
+  - Office space occupancy
+
+17.12 SEARCH & DISCOVERY UX
+-------------------------------
+  - Global search across entities (people, startups, pages, jobs, events)
+  - Filter panels with multiple criteria
+  - Sort options
+  - Saved searches (job alerts)
+  - Recommendation cards
+  - Trending/featured sections
+  - Infinite scroll or pagination
+
+17.13 ACCESSIBILITY & INTERNATIONALIZATION
+---------------------------------------------
+  - Language support (default English, configurable)
+  - Currency support (INR primary, USD for international)
+  - Timezone handling (default Asia/Kolkata)
+  - Date format considerations
+  - Color contrast for status badges and alerts
+  - Keyboard navigation for power users
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+Summary Statistics:
+  - 150+ database models
+  - 700+ API endpoints
+  - 8 user role types
+  - 6 distinct portal experiences
+  - 30+ route files
+  - 38+ controller files
+  - Comprehensive payment integration (Razorpay)
+  - Real-time features (Socket.IO)
+  - Multi-tenant SaaS architecture
+
+This document should provide the UX/UI designer with a thorough understanding
+of EcoSync's platform complexity, user flows, data relationships, and design
+requirements to create an effective introductory website and portal designs.

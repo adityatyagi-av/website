@@ -1,0 +1,699 @@
+================================================================================
+EVENT MODULE - COMPLETE FLOW DOCUMENTATION
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-07
+Base URL: /api/ecosystem
+Module: Event Management (Ecosystem Portal)
+
+================================================================================
+HIGH-LEVEL OVERVIEW
+================================================================================
+
+The Event module is a full-featured event management system within the
+ecosystem portal. It supports the complete event lifecycle from creation to
+post-event feedback, including paid ticketing, live streaming via Jitsi,
+real-time interaction via Socket.IO, and a recommendation engine.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        ECOSYSTEM EVENT MANAGEMENT                            │
+│                       Base: /api/ecosystem/event                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  • Full event lifecycle: Create → Publish → Live → Complete                  │
+│  • Supports: In-Person, Virtual (Jitsi), and Hybrid formats                  │
+│  • Paid events with Razorpay payment integration                             │
+│  • Live streaming with real-time chat, polls, and Q&A                        │
+│  • Registration with approval, waitlist, and check-in flows                  │
+│  • Recurring events (daily, weekly, biweekly, monthly)                       │
+│  • Recommendation engine with personalized scoring                           │
+│  • Social features: bookmarks, invitations, feedback                         │
+│  • Analytics dashboard for hosts                                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+SECTION 1: EVENT LIFECYCLE
+================================================================================
+
+┌──────────┐     ┌───────────┐     ┌──────────┐     ┌───────────┐
+│  DRAFT   │────▶│ PUBLISHED │────▶│   LIVE   │────▶│ COMPLETED │
+└──────────┘     └───────────┘     └──────────┘     └───────────┘
+     │                │                                    ▲
+     │                │                                    │
+     │                ▼                               (auto-cron)
+     │          ┌───────────┐                              │
+     │          │ CANCELLED │                         endDate passes
+     │          └───────────┘
+     ▼
+┌──────────┐
+│ ARCHIVED │  (soft delete, only from DRAFT or CANCELLED)
+└──────────┘
+
+Status Meanings:
+  DRAFT       → Event created but not visible to public
+  PUBLISHED   → Event visible, accepting registrations
+  CANCELLED   → Event cancelled by host (all registrations cancelled too)
+  COMPLETED   → Event finished (manual or auto via cron every 15 min)
+  (ARCHIVED)  → Soft-deleted (isArchived=true), not a status enum value
+
+Transitions:
+  DRAFT → PUBLISHED      via POST /event/:eventId/publish
+  PUBLISHED → CANCELLED  via POST /event/:eventId/cancel
+  PUBLISHED → COMPLETED  via POST /event/:eventId/complete (or auto-cron)
+  DRAFT → ARCHIVED       via DELETE /event/:eventId
+  CANCELLED → ARCHIVED   via DELETE /event/:eventId
+
+================================================================================
+SECTION 2: EVENT CREATION FLOW
+================================================================================
+
+Step 1: Create Event
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/event
+
+→ User provides: title, description, dates, format, venue/virtual details
+→ Optional: page hosting, capacity, pricing, recurring config
+→ System generates unique slug from title
+→ Event starts in DRAFT status
+→ Creator auto-added as "host" organizer
+
+Step 2: Add Event Details (All Optional, DRAFT or PUBLISHED)
+─────────────────────────────────────────────────────────────────────────────
+
+  2a. Add Ticket Types
+  POST /api/ecosystem/event/:eventId/ticket-type
+  → Create tiers: "Free", "Early Bird", "VIP", etc.
+  → Set price, quantity, sale window
+
+  2b. Add Speakers
+  POST /api/ecosystem/event/:eventId/speaker
+  → Can link to platform users or add external speakers
+
+  2c. Add Sponsors
+  POST /api/ecosystem/event/:eventId/sponsor
+  → Tier-based: PLATINUM, GOLD, SILVER, BRONZE, PARTNER
+
+  2d. Add Timeline/Agenda
+  POST /api/ecosystem/event/:eventId/timeline
+  → Schedule items with start/end times, locations, speaker links
+
+  2e. Add Media (Gallery)
+  POST /api/ecosystem/event/:eventId/media
+  → Images, videos, documents
+
+  2f. Add Organizers
+  POST /api/ecosystem/event/:eventId/organizer
+  → Roles: host, co_host, moderator, speaker, organizer
+
+Step 3: Publish Event
+─────────────────────────────────────────────────────────────────────────────
+POST /api/ecosystem/event/:eventId/publish
+
+→ Validates required fields exist (title, description, dates, eventType)
+→ Status changes to PUBLISHED
+→ Event becomes visible in public listings
+→ If recurring: all child events also published
+
+RECURRING EVENT CREATION:
+─────────────────────────────────────────────────────────────────────────────
+
+When isRecurring=true:
+  1. Parent event created with recurrence settings
+  2. System computes future dates based on:
+     - DAILY: every day until recurringEndDate
+     - WEEKLY: specific days of week (recurringDays)
+     - BIWEEKLY: every 2 weeks on specific days
+     - MONTHLY: same day each month
+  3. Up to 52 child events created (max instances)
+  4. Each child linked via EventRecurrenceInstance table
+  5. Each child gets its own slug, organizer, and can be independently managed
+  6. Publish/Cancel cascades from parent to children
+  7. Update modes: this_only, all_future, all
+
+================================================================================
+SECTION 3: EVENT DISCOVERY FLOW
+================================================================================
+
+PUBLIC BROWSING (No auth required, optionalAuthenticate):
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌─────────────────┐
+  │  User Browses   │
+  │  Events Page    │
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    DISCOVERY ENDPOINTS                       │
+  ├─────────────────────────────────────────────────────────────┤
+  │                                                             │
+  │  GET /event/all              → Filtered, paginated listing  │
+  │    Filters: eventType, format, city, country, isPaid,       │
+  │    isFeatured, tag, dateFrom, dateTo, upcoming, parentOnly  │
+  │                                                             │
+  │  GET /event/trending         → By registrations + views     │
+  │  GET /event/live-now         → Currently streaming events   │
+  │  GET /event/upcoming-week    → Next 5 events this week      │
+  │  GET /event/categories       → Popular event types + counts │
+  │  GET /event/page/:pageId     → Events by a specific page    │
+  │                                                             │
+  │  GET /event/recommended      → Personalized (auth required) │
+  │                                                             │
+  └─────────────────────────────────────────────────────────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  User Views     │
+  │  Event Detail   │──→ GET /event/:slug
+  └─────────────────┘
+           │
+           │ Records view (viewCount + EntityVisit)
+           │ Shows: registrationStatus, isBookmarked (if logged in)
+
+AUTHENTICATED VIEWS:
+─────────────────────────────────────────────────────────────────────────────
+
+  GET /event/my-events       → Events I'm registered for
+  GET /event/hosting         → Events I host or co-manage
+  GET /event/saved           → My bookmarked events
+  GET /event/invitations/mine → Invitations I've received
+  GET /event/registrations/mine → All my registrations with summary
+
+RECOMMENDATION ENGINE:
+─────────────────────────────────────────────────────────────────────────────
+
+  GET /event/recommended (auth required)
+
+  Score = Engagement(25%) + Recency(20%) + Quality(15%)
+        + Relevance(25%) + Social(15%)
+
+  Scoring Breakdown:
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ ENGAGEMENT (25%)                                            │
+  │   registrations * 4 + views * 0.02 + bookmarks * 2         │
+  │   Applied: log10(raw + 1) * 15                              │
+  ├─────────────────────────────────────────────────────────────┤
+  │ RECENCY (20%)                                               │
+  │   < 24h away  → 50 pts                                      │
+  │   24-72h away → 40 pts (decaying)                           │
+  │   72h-1wk     → 30 pts (decaying)                           │
+  │   > 1 week    → 20 pts (slow decay, min 2)                  │
+  │   Past event  → 5 pts (fast decay to 0)                     │
+  ├─────────────────────────────────────────────────────────────┤
+  │ QUALITY (15%) - Max 50 pts                                  │
+  │   Cover image       → +8                                    │
+  │   Description >200  → +6                                    │
+  │   Short description → +3                                    │
+  │   Tags present      → +4                                    │
+  │   Has speakers      → +8                                    │
+  │   Has sponsors      → +5                                    │
+  │   Has timeline      → +6                                    │
+  │   Has venue/URL     → +3                                    │
+  │   Fill rate >80%    → +10                                   │
+  │   Fill rate >50%    → +6                                    │
+  │   Fill rate >20%    → +3                                    │
+  ├─────────────────────────────────────────────────────────────┤
+  │ RELEVANCE (25%) - Max 50 pts                                │
+  │   User skill matches tag → +5 per match                     │
+  │   User city matches      → +12                              │
+  │   User sector in tags    → +8                               │
+  │   Attended same type     → +6                               │
+  ├─────────────────────────────────────────────────────────────┤
+  │ SOCIAL (15%) - Max 35 pts                                   │
+  │   Connections registered → +5 per (max 20)                  │
+  │   Followed page hosts   → +15                               │
+  └─────────────────────────────────────────────────────────────┘
+
+  Process:
+    1. Fetch user profile (skills, location, roles)
+    2. Fetch user's attended event types
+    3. Fetch user's followed pages
+    4. Fetch user's connections' registrations
+    5. Fetch top 100 future published events
+    6. Score each event
+    7. Sort by score descending
+    8. Paginate and return
+
+================================================================================
+SECTION 4: REGISTRATION FLOW
+================================================================================
+
+FREE EVENT REGISTRATION:
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────┐     POST /event/:eventId/register
+  │  User Clicks │────▶ { ticketTypeId: optional }
+  │  "Register"  │
+  └──────────────┘
+         │
+         ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │                 REGISTRATION LOGIC                        │
+  ├──────────────────────────────────────────────────────────┤
+  │                                                          │
+  │  Is event full?                                          │
+  │    YES + allowWaitlist → WAITLISTED                      │
+  │    YES + no waitlist   → 400 "Full capacity"             │
+  │    NO  + requiresApproval → REGISTERED (pending)         │
+  │    NO  + autoConfirm      → CONFIRMED                   │
+  │    NO  + default          → REGISTERED                   │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+         │
+         ▼
+  ┌──────────────┐
+  │  Registration │
+  │   Created     │
+  └──────────────┘
+
+PAID EVENT REGISTRATION:
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────┐     POST /event/:eventId/register
+  │  User Clicks │────▶ { ticketTypeId: "ticket-uuid" }
+  │  "Register"  │
+  └──────────────┘
+         │
+         ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │  Ticket validated (active, in sale window, not sold out) │
+  │  Registration created with status = REGISTERED           │
+  │  Razorpay order created                                  │
+  │  EventPayment record created (PENDING)                   │
+  └──────────────────────────────────────────────────────────┘
+         │
+         ▼ Returns: { registration, payment, razorpayOrder, requiresPayment: true }
+         │
+  ┌──────────────┐
+  │  Frontend     │──→ Opens Razorpay checkout with order details
+  │  Payment UI   │
+  └──────────────┘
+         │
+         ▼ User completes payment on Razorpay
+         │
+  ┌──────────────┐     POST /event/:eventId/verify-payment
+  │  Frontend     │────▶ { razorpayPaymentId, razorpayOrderId, razorpaySignature }
+  │  Verifies     │
+  └──────────────┘
+         │
+         ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │  Signature verified via RazorpayService                  │
+  │  Payment status → COMPLETED                              │
+  │  Registration status:                                    │
+  │    requiresApproval = true  → stays REGISTERED           │
+  │    requiresApproval = false → CONFIRMED                  │
+  └──────────────────────────────────────────────────────────┘
+
+STALE PAYMENT CLEANUP (Cron: every 10 min):
+  → Payments PENDING > 30 minutes → FAILED
+  → Registration → CANCELLED (reason: "Payment timeout")
+  → Ticket quantitySold decremented
+
+REGISTRATION STATUS FLOW:
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌────────────┐     ┌───────────┐     ┌───────────┐
+  │ REGISTERED │────▶│ CONFIRMED │────▶│ ATTENDED  │
+  │ (pending)  │     │           │     │ (checked  │
+  └────────────┘     └───────────┘     │    in)    │
+       │                  │            └───────────┘
+       │                  │
+       ▼                  ▼
+  ┌────────────┐     ┌───────────┐
+  │ WAITLISTED │     │ CANCELLED │
+  └────────────┘     └───────────┘
+       │                  ▲
+       │                  │
+       └──────────────────┘
+         (rejected or
+          cancelled)
+
+  REGISTERED → CONFIRMED    (approved by host, or auto-confirmed after payment)
+  REGISTERED → WAITLISTED   (over capacity during approval)
+  REGISTERED → CANCELLED    (rejected by host, or user cancels)
+  WAITLISTED → CONFIRMED    (promoted by host or auto-cron)
+  WAITLISTED → CANCELLED    (rejected by host)
+  CONFIRMED  → ATTENDED     (checked in by host at event)
+  CONFIRMED  → CANCELLED    (user cancels, refund logic applies)
+  Any        → NO_SHOW      (not checked in, event completed)
+
+================================================================================
+SECTION 5: HOST MANAGEMENT FLOW
+================================================================================
+
+APPROVAL FLOW (when requiresApproval = true):
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                        HOST DASHBOARD                                │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │                                                                      │
+  │  GET /event/:eventId/registrations         → View all registrations  │
+  │  GET /event/:eventId/registrations/summary → Status counts           │
+  │                                                                      │
+  │  POST /event/:eventId/registrations/approve                          │
+  │    → { registrationIds: [...] }                                      │
+  │    → Approves up to available capacity                               │
+  │    → Excess goes to WAITLISTED                                       │
+  │                                                                      │
+  │  POST /event/:eventId/registrations/reject                           │
+  │    → { registrationIds: [...], rejectionNote: "..." }                │
+  │    → Sets CANCELLED with note                                        │
+  │                                                                      │
+  │  POST /event/:eventId/registrations/promote-waitlist                 │
+  │    → { count: N }                                                    │
+  │    → Promotes N oldest waitlisted (FIFO)                             │
+  │                                                                      │
+  └──────────────────────────────────────────────────────────────────────┘
+
+CHECK-IN FLOW (at event):
+─────────────────────────────────────────────────────────────────────────────
+
+  POST /event/:eventId/check-in
+    → { registrationId: "..." }
+    → CONFIRMED → ATTENDED + timestamps
+
+  POST /event/:eventId/bulk-check-in
+    → { registrationIds: [...] }
+    → Bulk check-in for confirmed attendees
+
+EXPORT:
+─────────────────────────────────────────────────────────────────────────────
+
+  GET /event/:eventId/registrations/export
+    → Returns CSV-ready data: name, email, phone, status, ticket, payment
+
+ANALYTICS:
+─────────────────────────────────────────────────────────────────────────────
+
+  GET /event/:eventId/analytics
+    → Views, registrations, bookmarks, conversion rate
+    → Status breakdown, ticket breakdown
+    → Revenue (total, refunded, net) for paid events
+    → Feedback (average rating, count)
+    → Daily registration trend
+
+================================================================================
+SECTION 6: CANCELLATION & REFUND FLOW
+================================================================================
+
+USER CANCELS REGISTRATION:
+─────────────────────────────────────────────────────────────────────────────
+
+  POST /event/:eventId/cancel-registration
+
+  ┌──────────────────────────────────────────────────────────┐
+  │                 CANCELLATION LOGIC                        │
+  ├──────────────────────────────────────────────────────────┤
+  │                                                          │
+  │  1. Update registration → CANCELLED                      │
+  │  2. If was CONFIRMED → decrement registrationCount       │
+  │  3. If had ticket → decrement quantitySold               │
+  │  4. If paid event with completed payment:                │
+  │                                                          │
+  │     Hours before event:                                  │
+  │     ┌───────────┬─────────────────┐                      │
+  │     │ > 48h     │ 100% refund     │                      │
+  │     │ 24h - 48h │  50% refund     │                      │
+  │     │ < 24h     │  No refund      │                      │
+  │     └───────────┴─────────────────┘                      │
+  │                                                          │
+  │  5. Refund via RazorpayService.createRefund              │
+  │  6. Payment status → REFUNDED                            │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+HOST CANCELS EVENT:
+─────────────────────────────────────────────────────────────────────────────
+
+  POST /event/:eventId/cancel
+
+  → Event status → CANCELLED
+  → ALL active registrations (REGISTERED, CONFIRMED, WAITLISTED) → CANCELLED
+  → If recurring: all child events + their registrations cancelled too
+  → Note: Host-initiated cancellation does not auto-trigger refunds
+    (refunds should be handled manually or via separate process)
+
+================================================================================
+SECTION 7: LIVE EVENT FLOW (VIRTUAL/HYBRID)
+================================================================================
+
+COMPLETE LIVE EVENT FLOW:
+─────────────────────────────────────────────────────────────────────────────
+
+  Phase 1: SETUP
+  ─────────────────────────────────────────────────
+  1. Create event with format = VIRTUAL or HYBRID
+  2. Publish event
+  3. Users register for event
+
+  Phase 2: GO LIVE
+  ─────────────────────────────────────────────────
+  4. Host calls POST /event/:eventId/live/start
+     → Creates EventLiveSession
+     → Generates Jitsi meeting room (sha256 hash)
+     → Event liveStatus = LIVE
+
+  Phase 3: JOINING
+  ─────────────────────────────────────────────────
+  5. Users call GET /event/:eventId/live/join
+     → Validates registration (CONFIRMED/ATTENDED)
+     → Returns full Jitsi config:
+       - Meeting URL with JWT token
+       - Role-based permissions
+       - UI configuration (toolbar, mute settings)
+
+  6. Frontend embeds Jitsi using returned config
+     → Uses Jitsi IFrame API or direct URL
+
+  7. Users connect to /events socket namespace
+     → Emit "join-live" { eventId }
+     → Server tracks participant, updates viewer count
+
+  Phase 4: INTERACTION (REAL-TIME VIA SOCKET.IO)
+  ─────────────────────────────────────────────────
+
+  ┌──────────────────────────────────────────────────────────┐
+  │               LIVE INTERACTION FEATURES                   │
+  ├──────────────────────────────────────────────────────────┤
+  │                                                          │
+  │  LIVE CHAT (Ephemeral - not persisted)                   │
+  │  ├── User emits "live-chat" { eventId, message }         │
+  │  └── All receive "live-chat-message" with user info      │
+  │                                                          │
+  │  POLLS (Host only creates, all vote)                     │
+  │  ├── Host emits "create-poll" { question, options }      │
+  │  ├── All receive "new-poll"                              │
+  │  ├── Users emit "vote-poll" { pollId, selectedOption }   │
+  │  ├── All receive "poll-update" with aggregated results   │
+  │  ├── Host emits "end-poll" { pollId }                    │
+  │  └── All receive "poll-ended" with final results         │
+  │                                                          │
+  │  Q&A (Persisted to database)                             │
+  │  ├── User emits "qa-submit" { eventId, question }        │
+  │  ├── All receive "new-question"                          │
+  │  ├── Users emit "qa-upvote" { questionId }               │
+  │  ├── All receive "question-upvoted"                      │
+  │  ├── Host emits "qa-answer" { questionId, answer }       │
+  │  └── All receive "question-answered"                     │
+  │                                                          │
+  │  VIEWER TRACKING                                         │
+  │  ├── Auto viewer count broadcast on join/leave           │
+  │  ├── Peak viewers tracked per session                    │
+  │  └── Disconnect auto-triggers leave                      │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+  Phase 5: PAUSE/RESUME (Optional)
+  ─────────────────────────────────────────────────
+  8. Host can pause:  POST /event/:eventId/live/pause
+     → liveStatus = PAUSED
+  9. Host can resume: POST /event/:eventId/live/resume
+     → liveStatus = LIVE
+
+  Phase 6: END
+  ─────────────────────────────────────────────────
+  10. Host calls POST /event/:eventId/live/end
+      → Calculates session duration
+      → Marks all participants as left
+      → liveStatus = ENDED, liveViewerCount = 0
+      → EventLiveSession finalized with duration, peakViewers
+
+  Phase 7: POST-EVENT
+  ─────────────────────────────────────────────────
+  11. View session history: GET /event/:eventId/live/history
+      → All past sessions with stats
+
+LIVE STATUS FLOW:
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌─────────────┐     ┌──────┐     ┌────────┐     ┌───────┐
+  │ NOT_STARTED │────▶│ LIVE │────▶│ PAUSED │────▶│ ENDED │
+  └─────────────┘     └──────┘     └────────┘     └───────┘
+                         │              │              ▲
+                         │              │              │
+                         │              └──────────────┘
+                         │                  (resume→LIVE→end)
+                         └─────────────────────────────┘
+                                    (direct end)
+
+================================================================================
+SECTION 8: SOCIAL INTERACTION FLOW
+================================================================================
+
+BOOKMARK FLOW:
+─────────────────────────────────────────────────────────────────────────────
+  POST /event/:eventId/bookmark      → Add bookmark + increment count
+  DELETE /event/:eventId/bookmark    → Remove bookmark + decrement count
+  GET /event/saved                   → List all bookmarked events
+
+INVITATION FLOW:
+─────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────┐                           ┌──────────────┐
+  │  User A  │── POST /event/:id/invite ─▶│  Invitation  │
+  │ (sender) │   { invitedUserId, msg }  │   PENDING    │
+  └──────────┘                           └──────────────┘
+                                                │
+                                                ▼
+                                         ┌──────────────┐
+                                         │   User B     │
+                                         │  (invited)   │
+                                         └──────┬───────┘
+                                                │
+                           POST /invitation/:id/respond
+                                                │
+                              ┌─────────────────┼─────────────────┐
+                              ▼                                   ▼
+                         ┌──────────┐                        ┌──────────┐
+                         │ ACCEPTED │                        │ DECLINED │
+                         └──────────┘                        └──────────┘
+                              │
+                              │ Note: Accepting does NOT auto-register.
+                              │ User B must separately register for the event.
+                              ▼
+                    POST /event/:id/register
+
+FEEDBACK FLOW:
+─────────────────────────────────────────────────────────────────────────────
+
+  Prerequisites:
+  → Event must be COMPLETED
+  → User must have ATTENDED or CONFIRMED status
+
+  POST /event/:eventId/feedback
+  → { rating: 1-5, review: "text", isPublic: true }
+  → If feedback already exists: UPDATES instead of creating duplicate
+
+  GET /event/:eventId/feedback
+  → Public feedback only, with average rating and total count
+
+Q&A FLOW:
+─────────────────────────────────────────────────────────────────────────────
+
+  Any user:  POST /event/:eventId/question          → Submit question
+  Any user:  POST /event/question/:id/upvote         → Upvote (+1)
+  Host only: POST /event/:eventId/question/:id/answer → Answer
+  Host only: POST /event/:eventId/question/:id/pin    → Toggle pin
+  Anyone:    GET /event/:eventId/questions            → List (pinned first)
+
+  Same Q&A also works via Socket.IO during live events (see Section 7).
+
+================================================================================
+SECTION 9: AUTOMATED PROCESSES (CRON JOBS)
+================================================================================
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        CRON JOB SCHEDULE                                   │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                            │
+│  Every 5 min  │ WAITLIST PROMOTION                                         │
+│               │ → Published events with waitlist + available capacity       │
+│               │ → Promote WAITLISTED → CONFIRMED (FIFO order)              │
+│               │ → Or → REGISTERED if requiresApproval                      │
+│               │                                                            │
+│  Every 10 min │ STALE PAYMENT CLEANUP                                      │
+│               │ → Payments PENDING > 30 min → FAILED                       │
+│               │ → Registration → CANCELLED                                 │
+│               │ → Ticket quantitySold decremented                          │
+│               │                                                            │
+│  Every 15 min │ AUTO-COMPLETE EVENTS                                       │
+│               │ → PUBLISHED events where endDate < now → COMPLETED         │
+│               │                                                            │
+│  Every hour   │ EVENT REMINDERS                                            │
+│               │ → 24h before: flag reminder24hSent                         │
+│               │ → 1h before: flag reminder1hSent                           │
+│               │ → (Email sending can be wired into flags)                  │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+SECTION 10: PERMISSION MODEL SUMMARY
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        PERMISSION MATRIX                                     │
+├──────────────────────────┬──────────────────────────────────────────────────┤
+│ Action                   │ Who Can Do It                                    │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ View public events       │ Anyone (no auth)                                 │
+│ View event detail        │ Anyone (no auth)                                 │
+│ Browse live/trending     │ Anyone (no auth)                                 │
+│ Get recommendations      │ Authenticated user                               │
+│ Register for event       │ Authenticated user                               │
+│ Cancel own registration  │ Authenticated user (own registration)            │
+│ Bookmark/unbookmark      │ Authenticated user                               │
+│ Invite to event          │ Authenticated user                               │
+│ Submit feedback          │ Authenticated user (attended/confirmed)          │
+│ Submit question          │ Authenticated user                               │
+│ Upvote question          │ Authenticated user                               │
+│ Create/edit/delete event │ Event author OR page OWNER/ADMIN                 │
+│ Publish/cancel/complete  │ Event author OR page OWNER/ADMIN                 │
+│ Manage tickets           │ Event author OR page OWNER/ADMIN                 │
+│ Manage team (organizers) │ Event author OR page OWNER/ADMIN                 │
+│ Manage speakers/sponsors │ Event author OR page OWNER/ADMIN                 │
+│ Approve/reject regs      │ Event author OR page OWNER/ADMIN                 │
+│ Check-in attendees       │ Event author OR page OWNER/ADMIN                 │
+│ View registrations list  │ Event author OR page OWNER/ADMIN                 │
+│ Export registrations     │ Event author OR page OWNER/ADMIN                 │
+│ View analytics           │ Event author OR page OWNER/ADMIN                 │
+│ Start/end/pause live     │ Event author OR page OWNER/ADMIN                 │
+│ Answer questions         │ Event author OR page OWNER/ADMIN                 │
+│ Pin questions            │ Event author OR page OWNER/ADMIN                 │
+│ Create live polls        │ Event author only (via socket)                   │
+│ End live polls           │ Event author only (via socket)                   │
+│ Answer Q&A (socket)      │ Event author only (via socket)                   │
+└──────────────────────────┴──────────────────────────────────────────────────┘
+
+================================================================================
+SECTION 11: DATA FLOW SUMMARY
+================================================================================
+
+  Event → has many → EventTicketType
+  Event → has many → EventRegistration → has one → EventPayment
+  Event → has many → EventOrganizer (→ links User)
+  Event → has many → EventSpeaker (→ optionally links User)
+  Event → has many → EventSponsor
+  Event → has many → EventTimeline
+  Event → has many → EventMedia
+  Event → has many → EventBookmark
+  Event → has many → EventInvitation
+  Event → has many → EventFeedback
+  Event → has many → EventQuestion
+  Event → has many → EventPoll → has many → EventPollVote
+  Event → has many → EventUpdate
+  Event → has many → EventLiveSession → has many → EventLiveParticipant
+  Event → has many → EventRecurrenceInstance (parent → child events)
+
+  Event → belongs to → User (author)
+  Event → optionally belongs to → Page (page-hosted events)
+  Event → optionally belongs to → Event (parentEventId for recurring)
+
+================================================================================
+END OF DOCUMENT
+================================================================================

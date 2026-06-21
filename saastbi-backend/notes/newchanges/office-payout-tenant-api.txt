@@ -1,0 +1,177 @@
+================================================================================
+OFFICE PAYOUT API - INCUBATION PORTAL (TENANT / PROVIDER SIDE)
+================================================================================
+
+Base URL    : /api/incubation-portal
+Auth        : Bearer access token + tenantkey header
+Middleware  : authenticatePortal
+
+Use these endpoints to show the incubator their earnings flow:
+- Money received from startups (via OfficePayment) is split by Razorpay Route
+  into a platform fee + a transfer to the incubator's Linked Account.
+- Each successful transfer is recorded as an OfficePayout row.
+
+--------------------------------------------------------------------------------
+GLOBAL HEADERS
+--------------------------------------------------------------------------------
+Authorization : Bearer <accessToken>   (required)
+tenantkey     : <tenantKey>            (required)
+
+--------------------------------------------------------------------------------
+COMMON ENUMS
+--------------------------------------------------------------------------------
+OfficePayoutStatus : "CREATED" | "PENDING" | "PROCESSED" | "REVERSED" | "FAILED"
+
+--------------------------------------------------------------------------------
+1) LIST PAYOUTS
+--------------------------------------------------------------------------------
+GET /api/incubation-portal/office/payouts
+
+QUERY PARAMS (all optional):
+  page    : integer >=1 (default 1)
+  limit   : integer 1-100 (default 10)
+  status  : OfficePayoutStatus
+  from    : ISO date / yyyy-mm-dd
+  to      : ISO date / yyyy-mm-dd
+
+RESPONSE 200 (data):
+{
+  "data": [
+    {
+      "id": "string",                       // OfficePayout.id
+      "tenantId": "string",
+      "payoutAccountId": "string | null",
+      "paymentId":       "string | null",
+      "razorpayTransferId":   "string | null",
+      "razorpaySettlementId": "string | null",
+      "amount":   number,
+      "currency": "string",                 // default "INR"
+      "status":   OfficePayoutStatus,
+      "payoutDate":    "ISO date | null",
+      "failureReason": "string | null",
+      "metadata":  object | null,
+      "createdAt": "ISO date",
+      "updatedAt": "ISO date",
+      "payment": {
+        "id": "string",
+        "amount": number,
+        "currency": "string",
+        "razorpayPaymentId": "string | null",
+        "bookingId": "string",
+        "createdAt": "ISO date"
+      } | null,
+      "payoutAccount": {
+        "id": "string",
+        "legalBusinessName": "string",
+        "razorpayLinkedAccountId": "string | null"
+      } | null
+    }
+  ],
+  "total": number,
+  "page": number,
+  "limit": number,
+  "totalPages": number,
+  "summary": {
+    // only present for the *whole* tenant (not date-filtered)
+    "CREATED":    { "count": number, "amount": number },
+    "PENDING":    { "count": number, "amount": number },
+    "PROCESSED":  { "count": number, "amount": number },
+    "REVERSED":   { "count": number, "amount": number },
+    "FAILED":     { "count": number, "amount": number }
+    // keys only appear if at least one payout exists in that status
+  }
+}
+
+--------------------------------------------------------------------------------
+2) PAYOUT SUMMARY  (lifetime totals + KYC snapshot)
+--------------------------------------------------------------------------------
+GET /api/incubation-portal/office/payouts/summary
+
+QUERY PARAMS: none
+
+RESPONSE 200 (data):
+{
+  "totalAmount": number,                    // sum across all statuses
+  "totalCount":  number,
+  "byStatus": {                             // breakdown by status
+    "PROCESSED": { "count": number, "amount": number },
+    "FAILED":    { "count": number, "amount": number }
+    // ... other statuses if present
+  },
+  "account": {                              // null if no payout account yet
+    "kycStatus": "PENDING" | "UNDER_REVIEW" | "NEEDS_CLARIFICATION"
+               | "ACTIVATED" | "REJECTED" | "SUSPENDED",
+    "isActive":  boolean,
+    "razorpayLinkedAccountId": "string | null",
+    "activatedAt": "ISO date | null"
+  } | null
+}
+
+USE THIS to drive a "Payouts" dashboard widget. If `account` is null OR
+`account.kycStatus !== "ACTIVATED"`, surface a CTA pointing to
+`/payout-account` setup.
+
+--------------------------------------------------------------------------------
+3) GET SINGLE PAYOUT
+--------------------------------------------------------------------------------
+GET /api/incubation-portal/office/payouts/:payoutId
+
+PATH PARAMS:
+  payoutId : OfficePayout.id
+
+RESPONSE 200 (data):
+{
+  // All OfficePayout columns (see #1)
+  "id": "string",
+  "...": "...",
+  "payment": {
+    // Full OfficePayment row + nested booking
+    "id": "string",
+    "bookingId": "string",
+    "amount": number,
+    "currency": "string",
+    "paymentType": "BOOKING" | "RENT" | "RECURRING_RENT" | "SECURITY_DEPOSIT" | "LATE_FEE",
+    "razorpayPaymentId": "string | null",
+    "razorpayOrderId":   "string | null",
+    "status": "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "REFUNDED",
+    "paidAt": "ISO date | null",
+    "invoiceNumber": "string | null",
+    "...": "...",
+    "booking": {
+      "id": "string",
+      "officeId": "string",
+      "startDate": "ISO date",
+      "endDate":   "ISO date | null",
+      "status": OfficeBookingStatus,
+      "totalAmount": number,
+      "office": {
+        "id": "string",
+        "name": "string",
+        "location": "string | null"
+      },
+      "bookerStartup": {
+        "id": "string",
+        "name": "string"
+      } | null
+    }
+  } | null,
+  "payoutAccount": { /* full IncubationPayoutAccount row */ }
+}
+
+ERRORS:
+  401  unauthorized
+  403  "Not authorized"     - payout belongs to a different tenant
+  404  "Payout not found"
+
+--------------------------------------------------------------------------------
+NOTES FOR FRONTEND
+--------------------------------------------------------------------------------
+- The list endpoint's `summary` block reflects ALL payouts for the tenant,
+  ignoring the `from` / `to` filters. Use `/summary` for explicit dashboard
+  totals, `/?status=...&from=...&to=...` for filtered tables.
+- `payoutDate` is when Razorpay confirmed the transfer was processed
+  (transfer.processed webhook). For PENDING / FAILED rows it is null.
+- `payment.razorpayPaymentId` lets you cross-link to the originating booking
+  payment for reconciliation.
+- Display `failureReason` in red for FAILED rows. Reversed rows usually mean
+  the payment was refunded; show context ("refunded by booker").

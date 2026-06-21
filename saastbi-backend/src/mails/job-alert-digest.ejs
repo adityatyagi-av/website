@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Alert</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;">
+          <tr>
+            <td style="background-color:#0066cc;padding:30px;text-align:center;">
+              <h1 style="color:#ffffff;margin:0;font-size:24px;">New Jobs for You</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px;">
+              <p style="color:#333;font-size:16px;line-height:1.6;">Hi <%= userName %>,</p>
+              <p style="color:#333;font-size:16px;line-height:1.6;">We found <strong><%= jobs.length %></strong> new job<%= jobs.length > 1 ? 's' : '' %> matching your alert "<strong><%= alertName %></strong>".</p>
+
+              <% for (var i = 0; i < jobs.length; i++) { %>
+              <table width="100%" style="background-color:#f8f9fa;border-radius:6px;padding:15px;margin:15px 0;border-left:4px solid #0066cc;">
+                <tr>
+                  <td>
+                    <h3 style="color:#0066cc;margin:0 0 5px;"><%= jobs[i].title %></h3>
+                    <p style="color:#666;margin:3px 0;"><strong><%= jobs[i].company %></strong></p>
+                    <p style="color:#888;margin:3px 0;font-size:13px;"><%= jobs[i].location %></p>
+                    <% if (jobs[i].salaryRange) { %>
+                    <p style="color:#28a745;margin:3px 0;font-size:13px;"><%= jobs[i].salaryRange %></p>
+                    <% } %>
+                  </td>
+                </tr>
+              </table>
+              <% } %>
+
+              <p style="color:#666;font-size:14px;line-height:1.6;margin-top:20px;">Sign in to view full details and apply.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#f8f9fa;padding:20px;text-align:center;">
+              <p style="color:#999;font-size:12px;margin:0;">You're receiving this because of your job alert settings. Manage alerts from your dashboard.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

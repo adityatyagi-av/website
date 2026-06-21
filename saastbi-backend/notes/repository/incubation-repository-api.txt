@@ -1,0 +1,1261 @@
+================================================================================
+PUBLIC REPOSITORY API - INCUBATION PORTAL (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-02-24
+Base URL: /api/incubation-portal (Portal) | /api (Public)
+
+Authentication:
+  Portal APIs: Portal Bearer Token (authenticatePortal middleware)
+  Public APIs: No auth required (uses API key in URL)
+
+================================================================================
+PUBLIC REPOSITORY MODULE FLOW
+================================================================================
+
+The Public Repository module allows incubation centers to create custom data
+repositories with user-defined schemas, manage data items within them, and
+expose the data publicly via auto-generated API endpoints using unique API keys.
+Supports dynamic field types, rate limiting, access logging, and bulk operations.
+
+FLOW DIAGRAM:
+--------------------------------------------------------------------------------
+
++------------------------------------------------------------------------------+
+|                     PUBLIC REPOSITORY MANAGEMENT                              |
+|                     Portal Base: /api/incubation-portal                       |
+|                     Public Base: /api/public/repository/:apiKey               |
++------------------------------------------------------------------------------+
+|  * Create repositories with custom schema (dynamic field definitions)         |
+|  * Supported field types: STRING, TEXT, NUMBER, BOOLEAN, DATE, URL, etc.      |
+|  * Auto-generated API key for each repository                                 |
+|  * Data validation against schema on every insert/update                      |
+|  * Public API endpoints for external consumers (no auth needed)               |
+|  * Per-repository rate limiting (configurable per minute)                      |
+|  * Access logging with IP, user agent, endpoint, response time                |
+|  * Bulk add/delete operations for data items                                  |
+|  * Repository statuses: ACTIVE, INACTIVE, ARCHIVED                            |
+|  * Redis caching for public API performance                                   |
++------------------------------------------------------------------------------+
+
+REPOSITORY LIFECYCLE:
+--------------------------------------------------------------------------------
+
++------------+     +------------+     +------------+
+|   ACTIVE   |---->|  INACTIVE  |---->|  ARCHIVED  |
++------------+     +------------+     +------------+
+      ^                  |
+      +------------------+
+
+Status Flow:
+  * ACTIVE     -> Repository is live; public API returns data
+  * INACTIVE   -> Repository exists but public API returns 403
+  * ARCHIVED   -> Soft deleted; public API returns 403
+
+TYPICAL WORKFLOW:
+--------------------------------------------------------------------------------
+
+Step 1: Create Repository with Schema
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/repository
+
+-> Define repository name, description, and schema fields
+-> Schema specifies field names, types, required flags, constraints
+-> Auto-generates unique API key and slug
+-> Returns repository with API key for public access
+
+Step 2: Add Data Items
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/repository/:repositoryId/item
+
+-> Add individual items matching the repository schema
+-> Data validated against schema before storing
+-> Items auto-ordered by creation sequence
+
+Step 3: Bulk Add Items (Optional)
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/repository/:repositoryId/items/bulk
+
+-> Add multiple items at once
+-> Each item validated individually against schema
+-> Atomic operation (all succeed or all fail)
+
+Step 4: Share Public API URL
+-------------------------------------------------------------------------------
+GET /api/public/repository/:apiKey
+
+-> External consumers fetch data using the API key
+-> No authentication required
+-> Rate limited per IP based on repository config
+-> Access logged for analytics
+
+Step 5: Monitor Usage
+-------------------------------------------------------------------------------
+GET /api/incubation-portal/repository/:repositoryId/stats
+GET /api/incubation-portal/repository/:repositoryId/access-logs
+
+-> View access counts (24h, 7d, 30d)
+-> Browse access logs with IP, user agent details
+
+Step 6: Regenerate API Key (If Compromised)
+-------------------------------------------------------------------------------
+POST /api/incubation-portal/repository/:repositoryId/regenerate-key
+
+-> Generates new API key, old one stops working immediately
+-> All caches invalidated
+
+Step 7: Archive When Done
+-------------------------------------------------------------------------------
+DELETE /api/incubation-portal/repository/:repositoryId
+
+-> Soft deletes (sets status to ARCHIVED)
+-> Public API returns 403 for archived repositories
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# PORTAL: REPOSITORY CRUD
+| Endpoint                                        | Method | Purpose                                |
+|-------------------------------------------------|--------|----------------------------------------|
+| /repository                                     | POST   | Create new repository with schema      |
+| /repositories                                   | GET    | List all repositories (paginated)      |
+| /repository/:repositoryId                       | GET    | Get repository details                 |
+| /repository/:repositoryId                       | PUT    | Update repository                      |
+| /repository/:repositoryId                       | DELETE | Archive repository (soft delete)       |
+
+# PORTAL: REPOSITORY ACTIONS
+| Endpoint                                        | Method | Purpose                                |
+|-------------------------------------------------|--------|----------------------------------------|
+| /repository/:repositoryId/regenerate-key        | POST   | Generate new API key                   |
+| /repository/:repositoryId/stats                 | GET    | Get repository statistics              |
+| /repository/:repositoryId/access-logs           | GET    | Get API access logs                    |
+
+# PORTAL: ITEM MANAGEMENT
+| Endpoint                                        | Method | Purpose                                |
+|-------------------------------------------------|--------|----------------------------------------|
+| /repository/:repositoryId/item                  | POST   | Add single item                        |
+| /repository/:repositoryId/items                 | GET    | List items (paginated)                 |
+| /repository/:repositoryId/item/:itemId          | GET    | Get item by ID                         |
+| /repository/:repositoryId/item/:itemId          | PUT    | Update item data                       |
+| /repository/:repositoryId/item/:itemId          | DELETE | Delete item                            |
+| /repository/:repositoryId/items/bulk            | POST   | Bulk add items                         |
+| /repository/:repositoryId/items/bulk            | DELETE | Bulk delete items                      |
+
+# PUBLIC API (No Auth)
+| Endpoint                                        | Method | Purpose                                |
+|-------------------------------------------------|--------|----------------------------------------|
+| /public/repository/:apiKey                      | GET    | Fetch repository data publicly         |
+| /public/repository/:apiKey/schema               | GET    | Fetch repository schema only           |
+| /public/repository/:apiKey/item/:itemId         | GET    | Fetch single item publicly             |
+
+================================================================================
+ENUM REFERENCE
+================================================================================
+
+RepositoryFieldType:
+- STRING         (Short text, optional maxLength)
+- TEXT           (Long text, optional maxLength)
+- NUMBER         (Numeric, optional min/max)
+- BOOLEAN        (true/false)
+- DATE           (ISO date string)
+- IMAGE_URL      (Valid URL pointing to an image)
+- DOCUMENT_URL   (Valid URL pointing to a document)
+- URL            (Any valid URL)
+- EMAIL          (Valid email address)
+- PHONE          (Phone number string)
+- SELECT         (Single select from options array)
+- MULTI_SELECT   (Multiple select from options array)
+
+RepositoryStatus:
+- ACTIVE         (Repository is live; public API serves data)
+- INACTIVE       (Repository paused; public API returns 403)
+- ARCHIVED       (Soft deleted; public API returns 403)
+
+================================================================================
+SCHEMA FIELD DEFINITION FORMAT
+================================================================================
+
+Each field in the schema array follows this structure:
+
+{
+  "name": "fieldName",          // Required. Letters, numbers, underscores. Must start with letter.
+  "type": "STRING",             // Required. One of RepositoryFieldType enum values.
+  "required": true,             // Optional. Boolean. Default: false.
+  "description": "Help text",   // Optional. Human-readable description.
+  "maxLength": 200,             // Optional. For STRING/TEXT types only.
+  "min": 0,                     // Optional. For NUMBER type only.
+  "max": 100,                   // Optional. For NUMBER type only.
+  "options": ["A", "B", "C"]    // Required for SELECT/MULTI_SELECT types.
+}
+
+Validation Rules:
+  * Field names must be unique within a schema
+  * Field names must match: /^[a-zA-Z][a-zA-Z0-9_]*$/
+  * Schema must contain at least 1 field
+  * SELECT/MULTI_SELECT must have non-empty options array
+  * NUMBER min cannot exceed max
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Operation successful message",
+  "data": { ... }
+}
+
+Paginated Response:
+{
+  "success": true,
+  "message": "List fetched",
+  "data": {
+    "data": [...],
+    "total": 100,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 5
+  }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message",
+  "error": "ERROR_CODE"
+}
+
+Rate Limit Response (429):
+{
+  "success": false,
+  "message": "Rate limit exceeded. Please try again later."
+}
+
+Rate Limit Headers (on all public API responses):
+  X-RateLimit-Limit: 60
+  X-RateLimit-Remaining: 55
+  X-RateLimit-Reset: 1708790460
+
+================================================================================
+1. REPOSITORY CRUD OPERATIONS (PORTAL)
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 CREATE REPOSITORY
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/repository
+Auth: Portal Token Required
+
+Purpose: Create a new public repository with a custom schema definition.
+
+Request Body:
+{
+  "name": "Company Directory",
+  "description": "Public directory of all incubated startups",
+  "schema": [
+    {
+      "name": "companyName",
+      "type": "STRING",
+      "required": true,
+      "maxLength": 200,
+      "description": "Name of the company"
+    },
+    {
+      "name": "website",
+      "type": "URL",
+      "required": false,
+      "description": "Company website"
+    },
+    {
+      "name": "industry",
+      "type": "SELECT",
+      "required": true,
+      "options": ["Technology", "Healthcare", "Finance", "Education", "Other"],
+      "description": "Primary industry"
+    },
+    {
+      "name": "employeeCount",
+      "type": "NUMBER",
+      "required": false,
+      "min": 1,
+      "max": 100000,
+      "description": "Number of employees"
+    },
+    {
+      "name": "isHiring",
+      "type": "BOOLEAN",
+      "required": false,
+      "description": "Currently hiring"
+    },
+    {
+      "name": "foundedDate",
+      "type": "DATE",
+      "required": false,
+      "description": "Date the company was founded"
+    },
+    {
+      "name": "contactEmail",
+      "type": "EMAIL",
+      "required": true,
+      "description": "Main contact email"
+    },
+    {
+      "name": "tags",
+      "type": "MULTI_SELECT",
+      "required": false,
+      "options": ["AI", "SaaS", "B2B", "B2C", "Hardware", "Marketplace"],
+      "description": "Company tags"
+    },
+    {
+      "name": "logoUrl",
+      "type": "IMAGE_URL",
+      "required": false,
+      "description": "Company logo URL"
+    },
+    {
+      "name": "about",
+      "type": "TEXT",
+      "required": false,
+      "maxLength": 2000,
+      "description": "About the company"
+    }
+  ],
+  "isRateLimited": true,
+  "rateLimitPerMinute": 60
+}
+
+Field Details:
+- name (string, required): Repository name. Used to generate slug.
+- description (string, optional): Repository description.
+- schema (array, required): Array of field definitions. See SCHEMA FIELD DEFINITION FORMAT section.
+- isRateLimited (boolean, optional): Enable rate limiting on public API. Default: true.
+- rateLimitPerMinute (number, optional): Max requests per minute per IP. Default: 60.
+
+Response (201):
+{
+  "success": true,
+  "message": "Repository created",
+  "data": {
+    "id": "cuid_repository_123",
+    "tenantId": "cuid_tenant_456",
+    "name": "Company Directory",
+    "slug": "company-directory",
+    "description": "Public directory of all incubated startups",
+    "apiKey": "repo_a1b2c3d4e5f6...64hexchars",
+    "status": "ACTIVE",
+    "schema": [
+      {
+        "name": "companyName",
+        "type": "STRING",
+        "required": true,
+        "maxLength": 200,
+        "description": "Name of the company"
+      },
+      ...
+    ],
+    "isRateLimited": true,
+    "rateLimitPerMinute": 60,
+    "totalItems": 0,
+    "creatorId": "cuid_user_789",
+    "createdAt": "2026-02-24T10:00:00.000Z",
+    "updatedAt": "2026-02-24T10:00:00.000Z"
+  }
+}
+
+Notes:
+  * Slug auto-generated from name. If duplicate exists, timestamp suffix added.
+  * API key format: "repo_" + 64 hex characters (crypto.randomBytes(32))
+  * Schema validated before saving. Invalid schemas return 400.
+
+--------------------------------------------------------------------------------
+1.2 GET ALL REPOSITORIES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/repositories
+Auth: Portal Token Required
+
+Purpose: List all repositories for the tenant with filters and pagination.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+- status (enum): Filter by ACTIVE | INACTIVE | ARCHIVED
+- search (string): Search in name and description
+
+Example: ?status=ACTIVE&search=directory&page=1&limit=10
+
+Response (200):
+{
+  "success": true,
+  "message": "Repositories fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_repository_123",
+        "name": "Company Directory",
+        "slug": "company-directory",
+        "description": "Public directory of all incubated startups",
+        "apiKey": "repo_a1b2c3d4...",
+        "status": "ACTIVE",
+        "schema": [...],
+        "isRateLimited": true,
+        "rateLimitPerMinute": 60,
+        "totalItems": 42,
+        "createdAt": "2026-02-24T10:00:00.000Z",
+        "updatedAt": "2026-02-24T12:00:00.000Z",
+        "_count": {
+          "items": 42,
+          "accessLogs": 1580
+        }
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+
+--------------------------------------------------------------------------------
+1.3 GET REPOSITORY BY ID
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId
+Auth: Portal Token Required
+
+Purpose: Get complete repository details including item and access log counts.
+
+Response (200):
+{
+  "success": true,
+  "message": "Repository details",
+  "data": {
+    "id": "cuid_repository_123",
+    "tenantId": "cuid_tenant_456",
+    "name": "Company Directory",
+    "slug": "company-directory",
+    "description": "Public directory of all incubated startups",
+    "apiKey": "repo_a1b2c3d4e5f6...",
+    "status": "ACTIVE",
+    "schema": [
+      {
+        "name": "companyName",
+        "type": "STRING",
+        "required": true,
+        "maxLength": 200,
+        "description": "Name of the company"
+      },
+      {
+        "name": "website",
+        "type": "URL",
+        "required": false,
+        "description": "Company website"
+      },
+      ...
+    ],
+    "isRateLimited": true,
+    "rateLimitPerMinute": 60,
+    "totalItems": 42,
+    "creatorId": "cuid_user_789",
+    "createdAt": "2026-02-24T10:00:00.000Z",
+    "updatedAt": "2026-02-24T12:00:00.000Z",
+    "_count": {
+      "items": 42,
+      "accessLogs": 1580
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+1.4 UPDATE REPOSITORY
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId
+Auth: Portal Token Required
+
+Purpose: Update repository name, description, status, schema, or rate limit settings.
+
+Request Body (all fields optional, send only what you want to change):
+{
+  "name": "Updated Company Directory",
+  "description": "Updated description",
+  "status": "INACTIVE",
+  "schema": [ ... ],
+  "isRateLimited": false,
+  "rateLimitPerMinute": 120
+}
+
+Field Details:
+- name (string, optional): New name. Slug auto-regenerated.
+- description (string, optional): New description.
+- status (enum, optional): ACTIVE | INACTIVE | ARCHIVED
+- schema (array, optional): New schema definition. WARNING: existing items are NOT re-validated.
+- isRateLimited (boolean, optional): Toggle rate limiting.
+- rateLimitPerMinute (number, optional): New rate limit.
+
+Response (200):
+{
+  "success": true,
+  "message": "Repository updated",
+  "data": {
+    "id": "cuid_repository_123",
+    "name": "Updated Company Directory",
+    "slug": "updated-company-directory",
+    ...
+  }
+}
+
+Notes:
+  * Changing schema does NOT re-validate existing items against the new schema.
+  * Cache invalidated on update (repo metadata, items, rate limit config).
+
+--------------------------------------------------------------------------------
+1.5 DELETE (ARCHIVE) REPOSITORY
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId
+Auth: Portal Token Required
+
+Purpose: Soft delete repository by setting status to ARCHIVED.
+
+Response (200):
+{
+  "success": true,
+  "message": "Repository archived",
+  "data": {
+    "id": "cuid_repository_123",
+    "status": "ARCHIVED",
+    ...
+  }
+}
+
+Notes:
+  * Items are preserved but public API returns 403.
+  * Can be reactivated by updating status back to ACTIVE.
+
+================================================================================
+2. REPOSITORY ACTIONS (PORTAL)
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 REGENERATE API KEY
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/regenerate-key
+Auth: Portal Token Required
+
+Purpose: Generate a new API key for the repository. Old key stops working immediately.
+
+Response (200):
+{
+  "success": true,
+  "message": "API key regenerated",
+  "data": {
+    "id": "cuid_repository_123",
+    "apiKey": "repo_new_key_x1y2z3...",
+    ...
+  }
+}
+
+Notes:
+  * Old API key invalidated immediately.
+  * All caches for old key cleared.
+  * External consumers must update to the new key.
+
+--------------------------------------------------------------------------------
+2.2 GET REPOSITORY STATISTICS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/stats
+Auth: Portal Token Required
+
+Purpose: Get usage statistics for the repository.
+
+Response (200):
+{
+  "success": true,
+  "message": "Repository statistics",
+  "data": {
+    "totalItems": 42,
+    "activeItems": 40,
+    "access": {
+      "last24h": 150,
+      "last7d": 980,
+      "last30d": 3400
+    },
+    "lastAccessedAt": "2026-02-24T11:30:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+2.3 GET ACCESS LOGS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/access-logs
+Auth: Portal Token Required
+
+Purpose: Browse API access logs for the repository.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 50)
+- sortBy (string, default: "createdAt")
+- order ("asc" | "desc", default: "desc")
+
+Response (200):
+{
+  "success": true,
+  "message": "Access logs fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_log_1",
+        "repositoryId": "cuid_repository_123",
+        "ipAddress": "192.168.1.100",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
+        "endpoint": "/public/repository/repo_a1b2c3d4...",
+        "responseTime": 45,
+        "createdAt": "2026-02-24T11:30:00.000Z"
+      },
+      ...
+    ],
+    "total": 1580,
+    "page": 1,
+    "limit": 50,
+    "totalPages": 32
+  }
+}
+
+================================================================================
+3. ITEM MANAGEMENT (PORTAL)
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 ADD ITEM
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/item
+Auth: Portal Token Required
+
+Purpose: Add a single data item to the repository.
+
+Request Body (must match repository schema):
+{
+  "companyName": "TechStartup Inc",
+  "website": "https://techstartup.com",
+  "industry": "Technology",
+  "employeeCount": 25,
+  "isHiring": true,
+  "foundedDate": "2024-01-15",
+  "contactEmail": "hello@techstartup.com",
+  "tags": ["AI", "SaaS", "B2B"],
+  "logoUrl": "https://cdn.example.com/logos/techstartup.png",
+  "about": "We build AI-powered tools for businesses."
+}
+
+Field Details:
+- Request body keys must match the schema field names.
+- Each field is validated against its type and constraints.
+- Required fields must be present and non-empty.
+- Unknown fields (not in schema) are silently ignored.
+
+Response (201):
+{
+  "success": true,
+  "message": "Item added",
+  "data": {
+    "id": "cuid_item_123",
+    "repositoryId": "cuid_repository_456",
+    "data": {
+      "companyName": "TechStartup Inc",
+      "website": "https://techstartup.com",
+      "industry": "Technology",
+      "employeeCount": 25,
+      "isHiring": true,
+      "foundedDate": "2024-01-15T00:00:00.000Z",
+      "contactEmail": "hello@techstartup.com",
+      "tags": ["AI", "SaaS", "B2B"],
+      "logoUrl": "https://cdn.example.com/logos/techstartup.png",
+      "about": "We build AI-powered tools for businesses."
+    },
+    "orderIndex": 1,
+    "isActive": true,
+    "createdById": "cuid_user_789",
+    "createdAt": "2026-02-24T10:05:00.000Z",
+    "updatedAt": "2026-02-24T10:05:00.000Z"
+  }
+}
+
+Notes:
+  * orderIndex auto-increments based on existing items.
+  * Repository totalItems counter incremented atomically.
+  * Validation errors return 400 with all failed field messages.
+
+--------------------------------------------------------------------------------
+3.2 GET ITEMS
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/items
+Auth: Portal Token Required
+
+Purpose: List all items in the repository with pagination.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 20)
+- sortBy (string, default: "orderIndex")
+- order ("asc" | "desc", default: "asc")
+- isActive ("true" | "false"): Filter by active status
+
+Response (200):
+{
+  "success": true,
+  "message": "Items fetched",
+  "data": {
+    "data": [
+      {
+        "id": "cuid_item_123",
+        "repositoryId": "cuid_repository_456",
+        "data": {
+          "companyName": "TechStartup Inc",
+          "website": "https://techstartup.com",
+          ...
+        },
+        "orderIndex": 1,
+        "isActive": true,
+        "createdById": "cuid_user_789",
+        "createdAt": "2026-02-24T10:05:00.000Z",
+        "updatedAt": "2026-02-24T10:05:00.000Z"
+      },
+      ...
+    ],
+    "total": 42,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 3
+  }
+}
+
+--------------------------------------------------------------------------------
+3.3 GET ITEM BY ID
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/item/:itemId
+Auth: Portal Token Required
+
+Purpose: Get a single item by ID.
+
+Response (200):
+{
+  "success": true,
+  "message": "Item details",
+  "data": {
+    "id": "cuid_item_123",
+    "repositoryId": "cuid_repository_456",
+    "data": { ... },
+    "orderIndex": 1,
+    "isActive": true,
+    "createdById": "cuid_user_789",
+    "createdAt": "2026-02-24T10:05:00.000Z",
+    "updatedAt": "2026-02-24T10:05:00.000Z"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.4 UPDATE ITEM
+--------------------------------------------------------------------------------
+Method: PUT
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/item/:itemId
+Auth: Portal Token Required
+
+Purpose: Update item data. Full replacement of the data object.
+
+Request Body (must match repository schema):
+{
+  "companyName": "TechStartup Inc (Updated)",
+  "website": "https://new-techstartup.com",
+  "industry": "Technology",
+  "employeeCount": 50,
+  "isHiring": false,
+  "foundedDate": "2024-01-15",
+  "contactEmail": "info@techstartup.com",
+  "tags": ["AI", "SaaS"],
+  "about": "Updated company description."
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Item updated",
+  "data": {
+    "id": "cuid_item_123",
+    "repositoryId": "cuid_repository_456",
+    "data": { ... updated data ... },
+    "orderIndex": 1,
+    "isActive": true,
+    "createdById": "cuid_user_789",
+    "createdAt": "2026-02-24T10:05:00.000Z",
+    "updatedAt": "2026-02-24T14:00:00.000Z"
+  }
+}
+
+Notes:
+  * This is a full replacement of the data field, not a merge.
+  * Validated against current repository schema.
+  * Cache invalidated after update.
+
+--------------------------------------------------------------------------------
+3.5 DELETE ITEM
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/item/:itemId
+Auth: Portal Token Required
+
+Purpose: Permanently delete an item.
+
+Response (200):
+{
+  "success": true,
+  "message": "Item deleted",
+  "data": {
+    "message": "Item deleted"
+  }
+}
+
+Notes:
+  * Hard delete (not soft delete).
+  * Repository totalItems counter decremented atomically.
+  * Cache invalidated after delete.
+
+--------------------------------------------------------------------------------
+3.6 BULK ADD ITEMS
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/items/bulk
+Auth: Portal Token Required
+
+Purpose: Add multiple items at once in a single transaction.
+
+Request Body:
+{
+  "items": [
+    {
+      "companyName": "Startup A",
+      "website": "https://startup-a.com",
+      "industry": "Healthcare",
+      "contactEmail": "team@startup-a.com"
+    },
+    {
+      "companyName": "Startup B",
+      "website": "https://startup-b.com",
+      "industry": "Finance",
+      "contactEmail": "team@startup-b.com"
+    },
+    {
+      "companyName": "Startup C",
+      "industry": "Education",
+      "contactEmail": "team@startup-c.com"
+    }
+  ]
+}
+
+Field Details:
+- items (array, required): Array of item data objects matching repository schema.
+- Each item validated individually. If any fails, entire operation rolls back.
+
+Response (201):
+{
+  "success": true,
+  "message": "Items added",
+  "data": [
+    {
+      "id": "cuid_item_101",
+      "repositoryId": "cuid_repository_456",
+      "data": { "companyName": "Startup A", ... },
+      "orderIndex": 43,
+      "isActive": true,
+      ...
+    },
+    {
+      "id": "cuid_item_102",
+      "data": { "companyName": "Startup B", ... },
+      "orderIndex": 44,
+      ...
+    },
+    {
+      "id": "cuid_item_103",
+      "data": { "companyName": "Startup C", ... },
+      "orderIndex": 45,
+      ...
+    }
+  ]
+}
+
+Notes:
+  * Atomic transaction: all items succeed or all fail.
+  * Error message includes the index of the failing item.
+  * totalItems incremented by the number of items added.
+
+--------------------------------------------------------------------------------
+3.7 BULK DELETE ITEMS
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/incubation-portal/repository/:repositoryId/items/bulk
+Auth: Portal Token Required
+
+Purpose: Delete multiple items at once.
+
+Request Body:
+{
+  "itemIds": [
+    "cuid_item_101",
+    "cuid_item_102",
+    "cuid_item_103"
+  ]
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Items deleted",
+  "data": {
+    "message": "3 items deleted"
+  }
+}
+
+Notes:
+  * All itemIds must belong to the specified repository.
+  * If any item is not found, returns 400 error.
+  * totalItems decremented atomically.
+
+================================================================================
+4. PUBLIC API (No Authentication)
+================================================================================
+
+These endpoints are for external consumers. No authentication token needed.
+API key is passed in the URL path. Rate limited per IP.
+
+--------------------------------------------------------------------------------
+4.1 GET REPOSITORY DATA (PUBLIC)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/public/repository/:apiKey
+Auth: None (API key in URL)
+
+Purpose: Fetch all active items from the repository.
+
+Query Parameters:
+- page (number, default: 1)
+- limit (number, default: 100, max: 500)
+
+Response (200):
+{
+  "success": true,
+  "message": "Repository data fetched",
+  "data": {
+    "repository": {
+      "name": "Company Directory",
+      "description": "Public directory of all incubated startups",
+      "schema": [...],
+      "totalItems": 42
+    },
+    "items": [
+      {
+        "id": "cuid_item_123",
+        "companyName": "TechStartup Inc",
+        "website": "https://techstartup.com",
+        "industry": "Technology",
+        "employeeCount": 25,
+        "isHiring": true,
+        "foundedDate": "2024-01-15T00:00:00.000Z",
+        "contactEmail": "hello@techstartup.com",
+        "tags": ["AI", "SaaS", "B2B"],
+        "logoUrl": "https://cdn.example.com/logos/techstartup.png",
+        "about": "We build AI-powered tools for businesses.",
+        "_createdAt": "2026-02-24T10:05:00.000Z",
+        "_updatedAt": "2026-02-24T10:05:00.000Z"
+      },
+      ...
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 100,
+      "total": 42,
+      "totalPages": 1
+    }
+  }
+}
+
+Notes:
+  * Items flattened: data fields spread at top level with id, _createdAt, _updatedAt.
+  * Only active items returned (isActive: true).
+  * Max 500 items per page.
+  * Response cached in Redis for 60 seconds.
+  * Repository metadata cached for 5 minutes.
+  * Access logged (IP, user agent, endpoint, response time).
+
+Response Headers:
+  X-RateLimit-Limit: 60
+  X-RateLimit-Remaining: 59
+  X-RateLimit-Reset: 1708790460
+
+--------------------------------------------------------------------------------
+4.2 GET REPOSITORY SCHEMA (PUBLIC)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/public/repository/:apiKey/schema
+Auth: None (API key in URL)
+
+Purpose: Fetch only the repository schema (no items).
+
+Response (200):
+{
+  "success": true,
+  "message": "Repository schema fetched",
+  "data": {
+    "name": "Company Directory",
+    "description": "Public directory of all incubated startups",
+    "schema": [
+      {
+        "name": "companyName",
+        "type": "STRING",
+        "required": true,
+        "maxLength": 200,
+        "description": "Name of the company"
+      },
+      {
+        "name": "industry",
+        "type": "SELECT",
+        "required": true,
+        "options": ["Technology", "Healthcare", "Finance", "Education", "Other"],
+        "description": "Primary industry"
+      },
+      ...
+    ],
+    "totalItems": 42
+  }
+}
+
+Notes:
+  * Useful for external consumers to understand the data structure.
+  * Rate limited but lighter weight than fetching all data.
+
+--------------------------------------------------------------------------------
+4.3 GET SINGLE ITEM (PUBLIC)
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/public/repository/:apiKey/item/:itemId
+Auth: None (API key in URL)
+
+Purpose: Fetch a single item by ID.
+
+Response (200):
+{
+  "success": true,
+  "message": "Item fetched",
+  "data": {
+    "id": "cuid_item_123",
+    "companyName": "TechStartup Inc",
+    "website": "https://techstartup.com",
+    "industry": "Technology",
+    "employeeCount": 25,
+    "isHiring": true,
+    "foundedDate": "2024-01-15T00:00:00.000Z",
+    "contactEmail": "hello@techstartup.com",
+    "tags": ["AI", "SaaS", "B2B"],
+    "logoUrl": "https://cdn.example.com/logos/techstartup.png",
+    "about": "We build AI-powered tools for businesses.",
+    "_createdAt": "2026-02-24T10:05:00.000Z",
+    "_updatedAt": "2026-02-24T10:05:00.000Z"
+  }
+}
+
+Notes:
+  * Only returns active items.
+  * Returns 404 if item is inactive or doesn't exist.
+
+================================================================================
+COMPLETE USER JOURNEY EXAMPLES
+================================================================================
+
+EXAMPLE 1: Create a Company Directory Repository
+--------------------------------------------------------------------------------
+
+Step 1: Create repository with schema
+POST /api/incubation-portal/repository
+Body: {
+  "name": "Company Directory",
+  "description": "Public listing of incubated companies",
+  "schema": [
+    { "name": "companyName", "type": "STRING", "required": true },
+    { "name": "website", "type": "URL" },
+    { "name": "industry", "type": "SELECT", "required": true, "options": ["Tech", "Health", "Finance"] },
+    { "name": "contactEmail", "type": "EMAIL", "required": true }
+  ]
+}
+-> Returns repository with apiKey: "repo_abc123..."
+
+Step 2: Bulk add company data
+POST /api/incubation-portal/repository/:id/items/bulk
+Body: {
+  "items": [
+    { "companyName": "AlphaAI", "website": "https://alphaai.com", "industry": "Tech", "contactEmail": "hi@alphaai.com" },
+    { "companyName": "HealthPlus", "industry": "Health", "contactEmail": "info@healthplus.com" }
+  ]
+}
+
+Step 3: Share public URL with external consumers
+GET /api/public/repository/repo_abc123...
+
+-> Anyone can access the company directory via this URL
+
+
+EXAMPLE 2: Event Schedule Repository
+--------------------------------------------------------------------------------
+
+Step 1: Create repository
+POST /api/incubation-portal/repository
+Body: {
+  "name": "Event Schedule Q2 2026",
+  "schema": [
+    { "name": "eventTitle", "type": "STRING", "required": true },
+    { "name": "eventDate", "type": "DATE", "required": true },
+    { "name": "eventType", "type": "SELECT", "options": ["Workshop", "Webinar", "Demo Day", "Networking"] },
+    { "name": "description", "type": "TEXT", "maxLength": 1000 },
+    { "name": "registrationLink", "type": "URL" }
+  ],
+  "rateLimitPerMinute": 30
+}
+
+Step 2: Add events one by one
+POST /api/incubation-portal/repository/:id/item
+Body: {
+  "eventTitle": "Demo Day Spring 2026",
+  "eventDate": "2026-04-15",
+  "eventType": "Demo Day",
+  "description": "Annual demo day for Q2 cohort startups",
+  "registrationLink": "https://events.incubator.com/demo-day-2026"
+}
+
+Step 3: Monitor usage
+GET /api/incubation-portal/repository/:id/stats
+
+Step 4: Check who is accessing the API
+GET /api/incubation-portal/repository/:id/access-logs
+
+
+EXAMPLE 3: Managing API Key Security
+--------------------------------------------------------------------------------
+
+Step 1: Suspect API key is leaked
+-> Check access logs for unusual patterns
+GET /api/incubation-portal/repository/:id/access-logs
+
+Step 2: Regenerate the API key
+POST /api/incubation-portal/repository/:id/regenerate-key
+-> Old key immediately stops working
+-> Share new key with authorized consumers only
+
+Step 3: Temporarily disable repository
+PUT /api/incubation-portal/repository/:id
+Body: { "status": "INACTIVE" }
+-> Public API returns 403 until reactivated
+
+
+EXAMPLE 4: Updating Repository Schema
+--------------------------------------------------------------------------------
+
+Step 1: View current repository and schema
+GET /api/incubation-portal/repository/:id
+
+Step 2: Update schema to add new fields
+PUT /api/incubation-portal/repository/:id
+Body: {
+  "schema": [
+    ...existing fields...,
+    { "name": "phoneNumber", "type": "PHONE", "required": false }
+  ]
+}
+
+Step 3: Update existing items with the new field
+PUT /api/incubation-portal/repository/:id/item/:itemId
+Body: {
+  ...existing data...,
+  "phoneNumber": "+1-555-123-4567"
+}
+
+Note: Existing items are NOT re-validated when schema changes. Only new
+inserts and explicit updates are validated against the current schema.
+
+================================================================================
+API CHEAT SHEET - WHICH API TO USE WHEN
+================================================================================
+
+QUESTION                                       API TO USE
+--------------------------------------------------------------------------------
+"Create a new data repository"                 POST /repository
+"See all my repositories"                      GET /repositories
+"See repository details & schema"              GET /repository/:id
+"Update repository name or settings"           PUT /repository/:id
+"Archive/deactivate a repository"              DELETE /repository/:id
+"Get a new API key"                            POST /repository/:id/regenerate-key
+"See how many people access my API"            GET /repository/:id/stats
+"See detailed access logs"                     GET /repository/:id/access-logs
+"Add a single data entry"                      POST /repository/:id/item
+"See all data entries"                         GET /repository/:id/items
+"See one data entry"                           GET /repository/:id/item/:itemId
+"Update a data entry"                          PUT /repository/:id/item/:itemId
+"Delete a data entry"                          DELETE /repository/:id/item/:itemId
+"Add many entries at once"                     POST /repository/:id/items/bulk
+"Delete many entries at once"                  DELETE /repository/:id/items/bulk
+"Access data publicly (external)"              GET /public/repository/:apiKey
+"View schema publicly"                         GET /public/repository/:apiKey/schema
+"Get single item publicly"                     GET /public/repository/:apiKey/item/:itemId
+
+================================================================================
+CACHING STRATEGY
+================================================================================
+
+Redis Cache Keys:
+  * repo:{apiKey}              -> Repository metadata (TTL: 5 minutes)
+  * repo_items:{apiKey}:{p}:{t} -> Paginated items (TTL: 60 seconds)
+  * repo_rl_config:{apiKey}    -> Rate limit config (TTL: 5 minutes)
+  * repo_rl:{apiKey}:{ip}     -> Rate limit counter per IP (TTL: 60 seconds)
+
+Cache Invalidation:
+  * On update repository -> clears repo, repo_rl_config, all repo_items pages
+  * On delete/archive    -> clears repo, repo_rl_config, all repo_items pages
+  * On regenerate key    -> clears old key caches
+  * On item add/update/delete -> clears repo_items pages for that apiKey
+
+================================================================================
+RATE LIMITING
+================================================================================
+
+Public API endpoints are rate limited per repository per IP address.
+
+Default: 60 requests per minute per IP
+Configurable: Set rateLimitPerMinute when creating/updating repository
+
+Response Headers:
+  X-RateLimit-Limit: Maximum requests allowed per minute
+  X-RateLimit-Remaining: Requests remaining in current window
+  X-RateLimit-Reset: Unix timestamp when the window resets
+
+When Exceeded (HTTP 429):
+{
+  "success": false,
+  "message": "Rate limit exceeded. Please try again later."
+}
+
+Rate limiting can be disabled per repository by setting isRateLimited: false.
+
+================================================================================
+END OF PUBLIC REPOSITORY API DOCUMENTATION
+================================================================================

@@ -1,0 +1,753 @@
+================================================================================
+INDIVIDUAL STARTUP DETAIL APIs - INCUBATION PORTAL (FRONTEND REFERENCE)
+================================================================================
+
+Audience: frontend engineers (or an LLM generating UI code) building the
+incubation-portal individual startup detail screens. Every endpoint in this
+document is derived from:
+
+  src/routes/incubation/portal/startup.route.js
+  src/controllers/incubation/portal/startup-detail.controller.js
+  src/services/incubation/portal/startup-detail.service.js
+  prisma/schema.prisma (models Startup, StartupApplication, Evaluation,
+                       FundingDisbursement, StartupFundingRequest,
+                       StartupProgramAssociation, OfficeAllocation,
+                       OfficeBooking, OfficePayment, FacilityBooking,
+                       Mentorship, MentorSession, SchemeAnswer, etc.)
+
+Global Conventions
+------------------
+- Base URL prefix: /api/incubation-portal
+- Auth header:     Authorization: Bearer <portal token>     (authenticatePortal)
+- Access gate:     requireAccessByMethod(MODULE_KEYS.STARTUP_MANAGEMENT)
+                   All routes below are gated on the STARTUP_MANAGEMENT module.
+- Tenant context:  tenantId is resolved from the authenticated user's token
+                   (req.user.tenantId). No separate tenantkey header needed.
+- Response envelope (apiResponse.sendSuccess):
+    {
+      "success": true,
+      "message": "<human message>",
+      "data":    <payload described per endpoint>
+    }
+- Errors:
+    { "success": false, "message": "<reason>", "statusCode": 4xx }
+- All IDs are CUIDs. All timestamps are ISO-8601 strings.
+- All endpoints verify the startup belongs to the tenant via
+  StartupTenantAssociation before returning data.
+
+Who can access these APIs:
+  - Incubation admin
+  - Program managers
+  Any user with STARTUP_MANAGEMENT module access on the incubation portal.
+
+
+================================================================================
+SECTION 1 - STARTUP OVERVIEW (AGGREGATED SUMMARY)
+================================================================================
+A single endpoint returning a consolidated dashboard summary for a startup.
+Use this for the startup detail landing page.
+
+--------------------------------------------------------------------------------
+1.1  GET /startups/:startupId/overview
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED) - ID of the startup
+
+Response data:
+  {
+    "startup": {
+      "id": "clx...",
+      "name": "TechVenture",
+      "logoUrl": "https://...",
+      "sector": "HealthTech",
+      "stage": "GROWTH",
+      "status": "APPROVED"
+    },
+    "associations": {
+      "totalIncubators": 2,
+      "totalPrograms": 3
+    },
+    "funding": {
+      "totalApproved": 5000000,
+      "totalDisbursed": 2000000,
+      "pendingRequestsCount": 1
+    },
+    "evaluations": {
+      "totalEvaluations": 4,
+      "averageScore": 78.5
+    },
+    "office": {
+      "allocated": true,
+      "officeName": "Suite 204",
+      "officeLocation": "Building A, Floor 2"
+    },
+    "facilityBookings": {
+      "upcomingCount": 3
+    },
+    "mentorship": {
+      "activeMentorships": 2,
+      "totalSessionsCompleted": 15
+    },
+    "dataCollection": {
+      "pendingAssignments": 1
+    },
+    "tasks": {
+      "total": 12,
+      "pending": 3,
+      "inProgress": 2,
+      "completed": 7,
+      "overdue": 0
+    },
+    "team": {
+      "membersCount": 4,
+      "members": [
+        {
+          "id": "clx...",
+          "role": "FOUNDER",
+          "title": "CEO",
+          "user": {
+            "id": "clx...",
+            "firstName": "John",
+            "lastName": "Doe",
+            "profilePhoto": "https://..."
+          }
+        }
+      ]
+    },
+    "milestones": {
+      "total": 3,
+      "recent": [
+        {
+          "id": "clx...",
+          "title": "MVP Launch",
+          "description": "Launched MVP to beta users",
+          "type": "PRODUCT",
+          "date": "2026-03-15T00:00:00.000Z",
+          "isPublic": true
+        }
+      ]
+    }
+  }
+
+Notes:
+  - office.allocated=false means no current office allocation; no officeName
+    or officeLocation will be returned in that case.
+  - facilityBookings.upcomingCount counts bookings in next 30 days with
+    status PENDING or APPROVED.
+  - milestones.recent returns the latest 3 milestones by date.
+
+
+================================================================================
+SECTION 2 - FUNDING DETAILS
+================================================================================
+Complete funding view for the startup: program funding allocations,
+disbursements, requests, and the startup's own funding rounds.
+
+--------------------------------------------------------------------------------
+2.1  GET /startups/:startupId/funding
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Response data:
+  {
+    "summary": {
+      "totalApproved": 5000000,
+      "totalDisbursed": 2000000,
+      "pendingRequestsCount": 1
+    },
+    "programFunding": [
+      {
+        "programId": "clx...",
+        "programTitle": "Accelerator 2026",
+        "batchId": "clx...",
+        "batchName": "Batch 1",
+        "approvedFundingAmount": 3000000,
+        "totalDisbursedAmount": 1500000,
+        "status": "ACTIVE"
+      }
+    ],
+    "disbursements": [
+      {
+        "id": "clx...",
+        "programId": "clx...",
+        "applicationId": "clx...",
+        "startupId": "clx...",
+        "tenantId": "clx...",
+        "batchId": "clx...",
+        "amount": 500000,
+        "currency": "INR",
+        "disbursementType": "TRANCHE",
+        "status": "COMPLETED",
+        "trancheNumber": 1,
+        "milestoneName": "MVP Completion",
+        "reference": "TXN-001",
+        "disbursedById": "clx...",
+        "disbursedAt": "2026-02-10T10:00:00.000Z",
+        "notes": "First tranche released",
+        "createdAt": "2026-02-01T08:00:00.000Z",
+        "updatedAt": "2026-02-10T10:00:00.000Z",
+        "documents": [...],
+        "program": { "id": "clx...", "title": "Accelerator 2026" },
+        "batch": { "id": "clx...", "name": "Batch 1" }
+      }
+    ],
+    "fundingRequests": [
+      {
+        "id": "clx...",
+        "applicationId": "clx...",
+        "startupId": "clx...",
+        "programId": "clx...",
+        "tenantId": "clx...",
+        "batchId": "clx...",
+        "requestedAmount": 1000000,
+        "currency": "INR",
+        "note": "Need funds for market expansion",
+        "docUrl": "https://...",
+        "docName": "proposal.pdf",
+        "status": "PENDING",
+        "reviewedById": null,
+        "reviewNote": null,
+        "approvedAmount": null,
+        "disbursementId": null,
+        "createdAt": "2026-04-01T08:00:00.000Z",
+        "program": { "id": "clx...", "title": "Accelerator 2026" },
+        "batch": { "id": "clx...", "name": "Batch 1" }
+      }
+    ],
+    "fundingRounds": [
+      {
+        "id": "clx...",
+        "startupId": "clx...",
+        "roundType": "SEED",
+        "amount": 10000000,
+        "currency": "USD",
+        "date": "2025-11-01T00:00:00.000Z",
+        "leadInvestor": "ABC Ventures",
+        "investors": ["ABC Ventures", "Angel X"],
+        "valuation": 50000000,
+        "isAnnounced": true,
+        "pressRelease": "https://...",
+        "createdAt": "2025-11-01T00:00:00.000Z"
+      }
+    ]
+  }
+
+Enums referenced:
+  DisbursementType:     LUMP_SUM | TRANCHE | MILESTONE_BASED
+  DisbursementStatus:   PENDING | APPROVED | PROCESSING | COMPLETED | FAILED
+                        | CANCELLED
+  FundingRequestStatus: PENDING | APPROVED | REJECTED | CANCELLED
+  StartupProgramStatus: ACTIVE | COMPLETED | OFFBOARDED | REMOVED
+  FundingType (rounds): SEED | PRE_SEED | SERIES_A | SERIES_B | SERIES_C
+                        | ANGEL | GRANT | DEBT | REVENUE_BASED
+
+--------------------------------------------------------------------------------
+2.2  POST /startups/:startupId/funding/disburse - Disburse funds to startup
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Body (application/json):
+  {
+    "applicationId":    "clx...",        // REQUIRED - StartupApplication ID
+    "programId":        "clx...",        // REQUIRED - Program the disbursement is for
+    "batchId":          "clx...",        // optional - Batch ID (auto-detected from application if omitted)
+    "amount":           500000,          // REQUIRED - float > 0
+    "currency":         "INR",           // optional, default "INR"
+    "disbursementType": "TRANCHE",       // REQUIRED - LUMP_SUM | TRANCHE | MILESTONE_BASED
+    "milestoneName":    "MVP Completion",// optional - relevant for MILESTONE_BASED
+    "reference":        "TXN-002",       // optional - external reference
+    "notes":            "Second tranche",// optional
+    "documents": [                       // optional - supporting documents
+      {
+        "fileName": "sanction_letter.pdf",
+        "fileUrl":  "https://s3...",
+        "fileType": "application/pdf",
+        "description": "Sanction letter"
+      }
+    ]
+  }
+
+Validation rules:
+  - Startup must be ONBOARDED in the program (application status = "ONBOARDED")
+  - Amount must not exceed remaining approved amount for the startup-program
+    association (approvedFundingAmount - totalDisbursed - in-flight)
+  - Amount must not exceed allocation headroom for program/batch
+  - For TRANCHE type, trancheNumber is auto-incremented
+
+Response (201):
+  Same shape as a single object from disbursements array above, plus:
+  "startup": { "id": "clx...", "name": "TechVenture" },
+  "program": { "id": "clx...", "title": "Accelerator 2026" }
+
+Errors:
+  400 - "applicationId, programId, amount, and disbursementType are required"
+  400 - "Startup must be onboarded before funding can be disbursed"
+  400 - "Disbursement exceeds remaining approved amount..."
+  400 - "No funding has been allocated to this program/batch yet"
+  400 - "Disbursement exceeds allocation headroom..."
+  404 - "Startup not associated with this tenant"
+  404 - "Application not found for this startup/program"
+  404 - "Startup-Program association not found"
+
+
+================================================================================
+SECTION 3 - REGISTRATION DETAIL
+================================================================================
+Fetch the complete registration/application form answers for a startup's
+application to a program.
+
+--------------------------------------------------------------------------------
+3.1  GET /startups/:startupId/registration/:applicationId
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+  - applicationId (string, REQUIRED) - the StartupApplication ID
+
+Response data:
+  {
+    "applicationId": "clx...",
+    "programId": "clx...",
+    "programTitle": "Accelerator 2026",
+    "status": "ONBOARDED",
+    "submittedAt": "2026-01-15T10:00:00.000Z",
+    "reviewedAt": "2026-01-20T14:00:00.000Z",
+    "feedback": "Strong application, approved",
+    "score": 82.5,
+    "currentStage": "FINAL_REVIEW",
+    "requestedFundingAmount": 3000000,
+    "fundingPurpose": "Product development and hiring",
+    "meta": { ... },
+    "answers": [
+      {
+        "questionId": "clx...",
+        "questionText": "Describe your product/service",
+        "questionType": "LONG_TEXT",
+        "questionOptions": [],
+        "answerText": "We are building a health-tech platform...",
+        "answerFileUrl": null
+      },
+      {
+        "questionId": "clx...",
+        "questionText": "Upload your pitch deck",
+        "questionType": "FILE",
+        "questionOptions": [],
+        "answerText": null,
+        "answerFileUrl": "https://s3.../pitch-deck.pdf"
+      },
+      {
+        "questionId": "clx...",
+        "questionText": "What stage is your startup?",
+        "questionType": "SINGLE_SELECT",
+        "questionOptions": ["Idea", "MVP", "Growth", "Scale"],
+        "answerText": "Growth",
+        "answerFileUrl": null
+      }
+    ],
+    "documents": [
+      {
+        "id": "clx...",
+        "fileName": "incorporation_cert.pdf",
+        "fileUrl": "https://...",
+        "fileType": "application/pdf",
+        "uploadedBy": "clx...",
+        "uploadedAt": "2026-01-15T10:00:00.000Z"
+      }
+    ],
+    "statusHistory": [
+      {
+        "id": "clx...",
+        "applicationId": "clx...",
+        "oldStatus": "NEW",
+        "newStatus": "UNDER_REVIEW",
+        "changedById": "clx...",
+        "reason": null,
+        "createdAt": "2026-01-16T08:00:00.000Z"
+      }
+    ]
+  }
+
+Enums referenced:
+  SchemeQuestionType:        SHORT_TEXT | LONG_TEXT | SINGLE_SELECT |
+                             MULTI_SELECT | FILE | NUMBER | DATE | URL
+  StartupApplicationStatus:  NEW | SUBMITTED | UNDER_REVIEW | SHORTLISTED |
+                             UNDER_EVALUATION | EVALUATED | APPROVED |
+                             ONBOARDED | REJECTED | WITHDRAWN | WAITLISTED
+
+Errors:
+  404 - "Application not found for this startup"
+  403 - "Application does not belong to this tenant"
+  404 - "Startup not associated with this tenant"
+
+
+================================================================================
+SECTION 4 - EVALUATION SCORES
+================================================================================
+Fetch evaluation scores for the startup across all programs (or filtered by
+application).
+
+--------------------------------------------------------------------------------
+4.1  GET /startups/:startupId/evaluations
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Query params:
+  - applicationId (string, optional) - filter evaluations to a specific application
+
+Response data (array):
+  [
+    {
+      "applicationId": "clx...",
+      "programId": "clx...",
+      "programTitle": "Accelerator 2026",
+      "applicationStatus": "ONBOARDED",
+      "averageScore": 78.5,
+      "evaluations": [
+        {
+          "id": "clx...",
+          "evaluatorId": "clx...",
+          "evaluatorName": "Dr. Priya Sharma",
+          "totalScore": 82,
+          "remarks": "Strong team and market fit",
+          "status": "SUBMITTED",
+          "evaluatedAt": "2026-01-18T14:30:00.000Z"
+        },
+        {
+          "id": "clx...",
+          "evaluatorId": "clx...",
+          "evaluatorName": "Rahul Verma",
+          "totalScore": 75,
+          "remarks": "Good concept, needs refinement",
+          "status": "SUBMITTED",
+          "evaluatedAt": "2026-01-19T09:00:00.000Z"
+        }
+      ]
+    }
+  ]
+
+Notes:
+  - Results are grouped by applicationId
+  - averageScore is computed from evaluations with non-null totalScore
+  - averageScore is null if no evaluations have a score
+  - Only top-level scores returned (no question-level breakdown)
+
+Enums referenced:
+  EvaluationStatus: SUBMITTED | DRAFT
+
+
+================================================================================
+SECTION 5 - OFFICE ALLOCATION HISTORY
+================================================================================
+All office space allocations, bookings, and payment records for the startup.
+
+--------------------------------------------------------------------------------
+5.1  GET /startups/:startupId/office-allocations
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Response data:
+  {
+    "allocations": [
+      {
+        "id": "clx...",
+        "office": {
+          "id": "clx...",
+          "name": "Suite 204",
+          "location": "Building A, Floor 2",
+          "size": 500,
+          "officeType": "PRIVATE_OFFICE",
+          "monthlyRate": 25000,
+          "amenities": ["WiFi", "AC", "Parking"]
+        },
+        "allocatedBy": "Admin User",
+        "startDate": "2026-01-01T00:00:00.000Z",
+        "endDate": "2026-12-31T00:00:00.000Z",
+        "status": "ACTIVE",
+        "isActive": true,
+        "createdAt": "2025-12-28T10:00:00.000Z"
+      }
+    ],
+    "bookings": [
+      {
+        "id": "clx...",
+        "office": {
+          "id": "clx...",
+          "name": "Meeting Room 1",
+          "location": "Building A, Floor 1",
+          "officeType": "MEETING_ROOM"
+        },
+        "startDate": "2026-05-01T09:00:00.000Z",
+        "endDate": "2026-05-01T11:00:00.000Z",
+        "pricingType": "HOURLY",
+        "totalAmount": 1000,
+        "currency": "INR",
+        "status": "CONFIRMED",
+        "isPaid": true,
+        "createdAt": "2026-04-28T15:00:00.000Z"
+      }
+    ],
+    "payments": [
+      {
+        "id": "clx...",
+        "amount": 25000,
+        "currency": "INR",
+        "paymentType": "RENT",
+        "status": "COMPLETED",
+        "paidAt": "2026-01-05T08:00:00.000Z",
+        "invoiceNumber": "INV-2026-001",
+        "invoiceUrl": "https://...",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      }
+    ]
+  }
+
+Enums referenced:
+  OfficeAllocationStatus: ACTIVE | ENDED | CANCELLED
+  OfficeBookingStatus:    PENDING_PAYMENT | CONFIRMED | ACTIVE | COMPLETED |
+                          CANCELLED | EXPIRED
+  OfficePaymentStatus:    PENDING | COMPLETED | FAILED | REFUNDED
+  OfficePaymentType:      RENT | SECURITY_DEPOSIT | BOOKING_FEE | PENALTY
+
+
+================================================================================
+SECTION 6 - FACILITY BOOKING HISTORY
+================================================================================
+Paginated list of all facility bookings (meeting rooms, labs, etc.) for the
+startup.
+
+--------------------------------------------------------------------------------
+6.1  GET /startups/:startupId/facility-bookings
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Query params:
+  - page     (number, optional, default: 1)
+  - limit    (number, optional, default: 20)
+  - fromDate (ISO string, optional) - filter bookings from this date
+  - toDate   (ISO string, optional) - filter bookings until this date
+
+Response data:
+  {
+    "total": 25,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 2,
+    "data": [
+      {
+        "id": "clx...",
+        "facility": {
+          "id": "clx...",
+          "name": "Biotech Lab",
+          "type": "LAB",
+          "category": "Research",
+          "location": "Building B, Floor 3"
+        },
+        "date": "2026-05-20T00:00:00.000Z",
+        "startTime": "10:00",
+        "endTime": "12:00",
+        "unitsBooked": 1,
+        "status": "APPROVED",
+        "reason": "Testing prototype",
+        "comment": null,
+        "createdAt": "2026-05-18T14:00:00.000Z"
+      }
+    ]
+  }
+
+Enums referenced:
+  FacilityBookingStatus: PENDING | APPROVED | REJECTED | CANCELLED | COMPLETED
+
+
+================================================================================
+SECTION 7 - MENTORSHIPS
+================================================================================
+All mentorship relationships and session statistics for the startup.
+
+--------------------------------------------------------------------------------
+7.1  GET /startups/:startupId/mentorships
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Response data (array):
+  [
+    {
+      "id": "clx...",
+      "mentor": {
+        "id": "clx...",
+        "name": "Dr. Priya Sharma",
+        "profilePhoto": "https://...",
+        "headline": "15+ years in HealthTech",
+        "expertise": ["Product Strategy", "Fundraising"],
+        "industries": ["HealthTech", "SaaS"]
+      },
+      "engagementType": "INCUBATOR_SPONSORED",
+      "status": "ACTIVE",
+      "startDate": "2026-02-01T00:00:00.000Z",
+      "endDate": null,
+      "frequency": "BI_WEEKLY",
+      "objectives": "Help with product-market fit and fundraising",
+      "totalSessions": 8,
+      "milestones": [
+        {
+          "id": "clx...",
+          "title": "Complete GTM strategy",
+          "description": "Define go-to-market strategy for Q2",
+          "targetDate": "2026-04-30T00:00:00.000Z",
+          "status": "COMPLETED",
+          "progress": 100
+        }
+      ],
+      "sessionStats": {
+        "total": 10,
+        "completed": 8,
+        "totalHours": 12,
+        "totalSpending": 24000
+      }
+    }
+  ]
+
+Enums referenced:
+  EngagementType:             DIRECT | INCUBATOR_SPONSORED | PLATFORM
+  MentorshipStatus:           PENDING | ACTIVE | PAUSED | COMPLETED | CANCELLED
+  MeetingFrequency:           WEEKLY | BI_WEEKLY | MONTHLY | AS_NEEDED
+  MentorshipMilestoneStatus:  PENDING | IN_PROGRESS | COMPLETED | CANCELLED
+
+
+================================================================================
+SECTION 8 - ASSOCIATIONS (CROSS-INCUBATOR VIEW)
+================================================================================
+Shows all incubators and programs the startup is associated with, including
+those outside the current tenant. Useful for understanding the startup's
+full ecosystem involvement.
+
+--------------------------------------------------------------------------------
+8.1  GET /startups/:startupId/associations
+--------------------------------------------------------------------------------
+Path params:
+  - startupId (string, REQUIRED)
+
+Response data:
+  {
+    "tenantAssociations": [
+      {
+        "id": "clx...",
+        "tenant": {
+          "id": "clx...",
+          "organizationName": "NASSCOM CoE",
+          "tenantKey": "nasscom-coe",
+          "logoUrl": "https://..."
+        },
+        "status": "ONBOARDED",
+        "onboardedAt": "2025-08-01T00:00:00.000Z",
+        "offboardedAt": null,
+        "isActive": true
+      }
+    ],
+    "programAssociations": [
+      {
+        "id": "clx...",
+        "program": {
+          "id": "clx...",
+          "title": "Accelerator 2026",
+          "schemeTypeRef": { "id": "clx...", "name": "NIDHI-SSS" },
+          "governingBody": { "id": "clx...", "name": "DST" }
+        },
+        "tenant": {
+          "id": "clx...",
+          "organizationName": "NASSCOM CoE"
+        },
+        "batch": { "id": "clx...", "name": "Batch 1" },
+        "status": "ACTIVE",
+        "approvedFundingAmount": 3000000,
+        "totalDisbursedAmount": 1500000,
+        "onboardedAt": "2026-01-01T00:00:00.000Z",
+        "offboardedAt": null,
+        "isActive": true,
+        "applications": [
+          {
+            "id": "clx...",
+            "programId": "clx...",
+            "status": "ONBOARDED",
+            "submittedAt": "2025-12-15T10:00:00.000Z",
+            "score": 82.5
+          }
+        ]
+      }
+    ],
+    "counts": {
+      "totalIncubators": 2,
+      "activeIncubators": 2,
+      "totalPrograms": 3,
+      "activePrograms": 2
+    }
+  }
+
+Enums referenced:
+  TenantStartupStatus:   ONBOARDED | OFFBOARDED
+  StartupProgramStatus:  ACTIVE | COMPLETED | OFFBOARDED | REMOVED
+
+
+================================================================================
+SECTION 9 - QUICK REFERENCE: ALL ENDPOINTS
+================================================================================
+
+Method   Path                                              Description
+------   ----                                              -----------
+GET      /startups/:startupId/overview                    Aggregated dashboard summary
+GET      /startups/:startupId/funding                     Full funding details
+POST     /startups/:startupId/funding/disburse            Disburse funds to startup
+GET      /startups/:startupId/registration/:applicationId Registration form answers
+GET      /startups/:startupId/evaluations                 Evaluation scores
+GET      /startups/:startupId/office-allocations          Office allocation history
+GET      /startups/:startupId/facility-bookings           Facility booking history
+GET      /startups/:startupId/mentorships                 Mentorship details
+GET      /startups/:startupId/associations                Cross-incubator associations
+
+Pre-existing endpoints (same router):
+GET      /startups/list                                   Paginated startup list
+GET      /startups/get-startup/:startupId                 Basic startup details
+
+
+================================================================================
+SECTION 10 - FRONTEND INTEGRATION NOTES
+================================================================================
+
+1. Suggested page structure:
+   - Tab 1: Overview (use /overview endpoint)
+   - Tab 2: Funding (use /funding endpoint, disburse action)
+   - Tab 3: Registration (use /registration/:applicationId, pick from apps list)
+   - Tab 4: Evaluations (use /evaluations endpoint)
+   - Tab 5: Office & Facilities (use /office-allocations and /facility-bookings)
+   - Tab 6: Mentorship (use /mentorships endpoint)
+   - Tab 7: Associations (use /associations endpoint)
+
+2. The overview tab gives enough info to show cards/widgets with links to
+   detailed tabs. Load the overview first, then lazy-load other tabs.
+
+3. For the registration tab, first fetch basic startup details from
+   GET /startups/get-startup/:startupId to get the applications array,
+   then let the user pick which application's registration to view.
+
+4. For funding disbursement, the frontend needs to know:
+   - Which applications are ONBOARDED (from /funding -> programFunding)
+   - The remaining budget per association (approvedFundingAmount - totalDisbursed)
+   - Show a form with applicationId, programId pre-filled
+
+5. Evaluation scores are grouped by application. If user wants per-program
+   view, use the applicationId query filter.
+
+6. Office allocations returns 3 separate arrays:
+   - allocations (long-term space assignments)
+   - bookings (individual room bookings)
+   - payments (payment records for all office activities)
+
+7. Facility bookings are paginated. Use fromDate/toDate for calendar views.
+
+8. For the associations view, note that it shows ALL incubators and programs
+   the startup is part of (not just the current tenant). This is intentional
+   to give a complete picture of the startup's ecosystem involvement.

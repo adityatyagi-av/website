@@ -1,0 +1,855 @@
+================================================================================
+NOTIFICATION MODULE — FRONTEND API DOCUMENTATION
+================================================================================
+
+Version: 1.1.0
+Last Updated: 2026-03-07
+
+This module is available across THREE portals with identical endpoints:
+  - Ecosystem:         Base URL: /api/ecosystem
+  - Incubation Portal: Base URL: /api/incubation-portal
+  - Startup Portal:    Base URL: /api/startup-portal
+
+Authentication:
+  - Ecosystem:         User Bearer Token (authenticate middleware)
+  - Incubation Portal: Portal Bearer Token (authenticatePortal middleware)
+  - Startup Portal:    User Bearer Token (authenticate middleware)
+
+Note: All three portals share the same notification storage. The incubation
+portal resolves the portal user's linked ecosystem userId internally.
+Startup portal users authenticate as ecosystem Users directly (req.user.id),
+so no resolution is needed.
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+The notification system has three delivery channels:
+
+1. REST API    — Fetch, list, paginate, manage, and configure notifications
+2. Socket.IO   — Real-time delivery via the /notifications namespace
+3. Email       — Automatic background dispatch for supported notification types
+
+Key Concepts:
+- Every notification belongs to a single user (userId = ecosystem User.id)
+- Notifications have a TYPE (what happened) and CATEGORY (which module)
+- Users can configure per-category channel preferences (in-app, email, push)
+- Grouped notifications merge similar rapid-fire events (e.g., "3 people liked")
+- Notifications can be archived (soft-hide) then permanently purged by cron
+
+================================================================================
+DATA MODELS
+================================================================================
+
+Notification:
+  - id: string (cuid)
+  - userId: string (ecosystem User.id, always)
+  - type: NotificationType (see enum below)
+  - category: NotificationCategory (default: "SYSTEM")
+  - priority: NotificationPriority (default: "MEDIUM")
+  - title: string
+  - message: string
+  - data: JSON | null (arbitrary payload, e.g., { actors: [...], count: 3 })
+  - isRead: boolean (default: false)
+  - readAt: DateTime | null
+  - actionUrl: string | null (deep link for frontend navigation)
+  - actorId: string | null (who triggered the notification)
+  - actorName: string | null
+  - actorAvatar: string | null
+  - entityType: string | null (e.g., "MentorSession", "CommunityPost", "Post")
+  - entityId: string | null (ID of the related entity)
+  - groupKey: string | null (for grouped notifications, e.g., "post:123:like")
+  - isArchived: boolean (default: false)
+  - expiresAt: DateTime | null (auto-deleted by cron when expired)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+NotificationPreference:
+  - id: string (cuid)
+  - userId: string
+  - category: NotificationCategory
+  - inApp: boolean (default: true)
+  - email: boolean (default: true)
+  - push: boolean (default: false)
+  - createdAt: DateTime
+  - updatedAt: DateTime
+  - Unique constraint: [userId, category]
+
+NotificationType enum:
+  // Social
+  CONNECTION_REQUEST, CONNECTION_ACCEPTED, MESSAGE, MENTION,
+  LIKE, COMMENT, SHARE, FOLLOW, POST_LIKE, POST_COMMENT,
+  POST_SHARE, POST_MENTION, PROFILE_VIEW
+
+  // Event
+  EVENT_REMINDER, EVENT_UPDATE, EVENT_INVITATION,
+  EVENT_REGISTRATION_CONFIRMED, EVENT_CANCELLED, EVENT_WAITLIST_PROMOTED
+
+  // Job
+  JOB_ALERT, JOB_APPLICATION_UPDATE, JOB_NEW_APPLICATION,
+  JOB_REFERRAL_RECEIVED, JOB_REFERRAL_STATUS, JOB_DEADLINE_APPROACHING
+
+  // Mentorship
+  MENTORSHIP_REQUEST, MENTORSHIP_ACCEPTED, MENTORSHIP_DECLINED,
+  SESSION_REMINDER, SESSION_BOOKED, SESSION_CONFIRMED,
+  SESSION_CANCELLED, SESSION_DECLINED, SESSION_COMPLETED,
+  SESSION_RESCHEDULED, SESSION_NO_SHOW, REVIEW_RECEIVED, EARNING_UPDATE,
+  INCUBATOR_INVITATION, INCUBATOR_APPLICATION_APPROVED,
+  INCUBATOR_APPLICATION_REJECTED
+
+  // Incubation
+  APPLICATION_STATUS_CHANGED, CHANGE_REQUEST_CREATED,
+  CHANGE_REQUEST_RESPONSE, DOCUMENT_REQUEST_CREATED,
+  DOCUMENT_REQUEST_RESPONSE, EVALUATION_COMPLETED,
+  FUNDING_REQUEST_STATUS, FUNDING_DISBURSED, PANEL_ASSIGNED, PROGRAM_UPDATE
+
+  // Startup Portal
+  TASK_ASSIGNED, TASK_STATUS_CHANGED, TASK_OVERDUE,
+  FACILITY_BOOKING_STATUS, OFFICE_REQUEST_STATUS, OFFICE_BOOKING_UPDATE
+
+  // General
+  ACHIEVEMENT_UNLOCKED, SYSTEM, ANNOUNCEMENT_PUBLISHED,
+  PAYMENT_RECEIVED, PAYMENT_FAILED, SUBSCRIPTION_EXPIRING
+
+  // Community
+  COMMUNITY_INVITE, COMMUNITY_JOIN_REQUEST, COMMUNITY_JOIN_APPROVED,
+  COMMUNITY_POST, COMMUNITY_MENTION, COMMUNITY_COMMENT
+
+NotificationCategory enum:
+  SOCIAL, COMMUNITY, MENTORSHIP, INCUBATION, STARTUP,
+  JOB, EVENT, TASK, OFFICE, FUNDING, PAYMENT, SYSTEM
+
+NotificationPriority enum:
+  LOW, MEDIUM, HIGH, URGENT
+
+================================================================================
+API QUICK REFERENCE
+================================================================================
+
+All endpoints below use the portal-specific base URL.
+Replace {BASE} with the portal's base URL.
+
+| Endpoint                          | Method | Purpose                              |
+|-----------------------------------|--------|--------------------------------------|
+| /notification                     | GET    | List notifications (paginated)       |
+| /notification/unread-count        | GET    | Get unread counts (total + by cat)   |
+| /notification/preferences         | GET    | Get notification preferences         |
+| /notification/preferences         | PUT    | Update notification preferences      |
+| /notification/read-all            | PATCH  | Mark all as read (optional category) |
+| /notification/clear               | DELETE | Delete all archived notifications    |
+| /notification/:id                 | GET    | Get a single notification by ID      |
+| /notification/:id/read            | PATCH  | Mark a single notification as read   |
+| /notification/:id                 | DELETE | Archive a single notification        |
+
+================================================================================
+STANDARD RESPONSE FORMAT
+================================================================================
+
+Success Response:
+{
+  "success": true,
+  "message": "Notifications fetched",
+  "data": { ... }
+}
+
+Error Response:
+{
+  "success": false,
+  "message": "Error message"
+}
+
+Validation Error Response (400):
+{
+  "success": false,
+  "message": "Validation failed",
+  "errors": ["\"category\" must be one of [SOCIAL, COMMUNITY, ...]"]
+}
+
+================================================================================
+1. LIST NOTIFICATIONS
+================================================================================
+
+Method: GET
+URL: {BASE}/notification
+Auth: Token Required
+
+Purpose: Get paginated list of non-archived notifications for the current user.
+Sorted by createdAt descending (newest first).
+
+Query Parameters:
+- page (number, default: 1) — Page number
+- limit (number, default: 20, max: 50) — Items per page
+- category (string, optional) — Filter by category (e.g., "MENTORSHIP")
+- isRead (boolean, optional) — Filter: "true" for read, "false" for unread
+- type (string, optional) — Filter by specific type (e.g., "SESSION_BOOKED")
+
+Example: ?page=1&limit=20
+Example: ?category=MENTORSHIP&isRead=false
+Example: ?type=SESSION_BOOKED&page=1&limit=10
+
+Response (200):
+{
+  "success": true,
+  "message": "Notifications fetched",
+  "data": {
+    "notifications": [
+      {
+        "id": "cuid_notif_1",
+        "userId": "cuid_user_123",
+        "type": "SESSION_BOOKED",
+        "category": "MENTORSHIP",
+        "priority": "HIGH",
+        "title": "New Session Booking",
+        "message": "You have a new confirmed session booking",
+        "data": null,
+        "isRead": false,
+        "readAt": null,
+        "actionUrl": "/mentor/sessions/cuid_session_1",
+        "actorId": "cuid_user_456",
+        "actorName": null,
+        "actorAvatar": null,
+        "entityType": "MentorSession",
+        "entityId": "cuid_session_1",
+        "groupKey": null,
+        "isArchived": false,
+        "expiresAt": null,
+        "createdAt": "2026-03-05T10:00:00Z",
+        "updatedAt": "2026-03-05T10:00:00Z"
+      },
+      {
+        "id": "cuid_notif_2",
+        "userId": "cuid_user_123",
+        "type": "POST_LIKE",
+        "category": "SOCIAL",
+        "priority": "MEDIUM",
+        "title": "New like on your post",
+        "message": "Alice and 2 others liked your post",
+        "data": {
+          "actors": [
+            { "id": "cuid_user_a", "name": "Alice", "avatar": "..." },
+            { "id": "cuid_user_b", "name": "Bob", "avatar": null },
+            { "id": "cuid_user_c", "name": "Charlie", "avatar": null }
+          ],
+          "count": 3
+        },
+        "isRead": false,
+        "readAt": null,
+        "actionUrl": "/post/cuid_post_1",
+        "actorId": "cuid_user_a",
+        "actorName": "Alice",
+        "actorAvatar": "...",
+        "entityType": "Post",
+        "entityId": "cuid_post_1",
+        "groupKey": "post:cuid_post_1:like",
+        "isArchived": false,
+        "expiresAt": null,
+        "createdAt": "2026-03-05T09:45:00Z",
+        "updatedAt": "2026-03-05T09:55:00Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 45,
+      "totalPages": 3
+    }
+  }
+}
+
+Frontend Notes:
+- Use actionUrl to navigate when a notification is clicked
+- Grouped notifications (groupKey != null) show aggregated messages like
+  "Alice and 2 others liked your post" — use data.actors for avatar stacking
+- actorAvatar can be used to show the sender's profile photo
+- priority can be used to visually differentiate (e.g., URGENT = red accent)
+- Use category filter to build tab-based notification views
+
+================================================================================
+2. GET UNREAD COUNT
+================================================================================
+
+Method: GET
+URL: {BASE}/notification/unread-count
+Auth: Token Required
+
+Purpose: Get total unread count and breakdown by category. Use this for
+badge counts in the navigation bar and category tabs.
+
+Response (200):
+{
+  "success": true,
+  "message": "Unread count fetched",
+  "data": {
+    "total": 12,
+    "categories": {
+      "SOCIAL": 5,
+      "MENTORSHIP": 3,
+      "COMMUNITY": 2,
+      "SYSTEM": 2
+    }
+  }
+}
+
+Frontend Notes:
+- Show data.total as the main notification bell badge
+- Use data.categories to show per-tab badge counts
+- Categories not present in the object have 0 unread
+- This data is also pushed via socket (see Socket.IO section)
+
+================================================================================
+3. GET NOTIFICATION BY ID
+================================================================================
+
+Method: GET
+URL: {BASE}/notification/:id
+Auth: Token Required
+
+Purpose: Get full details of a single notification. Returns null-safe
+(404 if not found or not owned by the user).
+
+Path Parameters:
+- id (string, REQUIRED) — Notification ID
+
+Response (200):
+{
+  "success": true,
+  "message": "Notification fetched",
+  "data": {
+    "id": "cuid_notif_1",
+    "userId": "cuid_user_123",
+    "type": "SESSION_BOOKED",
+    "category": "MENTORSHIP",
+    "priority": "HIGH",
+    "title": "New Session Booking",
+    "message": "You have a new confirmed session booking",
+    ... (all fields)
+  }
+}
+
+Response (404):
+{
+  "success": false,
+  "message": "Notification not found"
+}
+
+================================================================================
+4. MARK SINGLE NOTIFICATION AS READ
+================================================================================
+
+Method: PATCH
+URL: {BASE}/notification/:id/read
+Auth: Token Required
+
+Purpose: Mark a single notification as read. Sets isRead=true and
+readAt=now(). After marking, the updated unread count is pushed
+via socket automatically.
+
+Path Parameters:
+- id (string, REQUIRED) — Notification ID
+
+Response (200):
+{
+  "success": true,
+  "message": "Notification marked as read",
+  "data": {
+    "id": "cuid_notif_1",
+    "isRead": true,
+    "readAt": "2026-03-05T11:00:00Z",
+    ... (all fields)
+  }
+}
+
+Response (404):
+{
+  "success": false,
+  "message": "Notification not found"
+}
+
+Frontend Notes:
+- Call this when user clicks on a notification
+- Updated unread count arrives via socket "notification:unread-count"
+- Can also be done via socket emit "notification:mark-read" (see below)
+
+================================================================================
+5. MARK ALL AS READ
+================================================================================
+
+Method: PATCH
+URL: {BASE}/notification/read-all
+Auth: Token Required
+
+Purpose: Mark all unread, non-archived notifications as read. Optionally
+filter by category to only mark a specific category as read.
+
+Request Body:
+{
+  "category": "MENTORSHIP"     // Optional — null/omitted = mark ALL as read
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "All notifications marked as read",
+  "data": {
+    "success": true
+  }
+}
+
+Frontend Notes:
+- Use without category for "Mark all as read" button
+- Use with category for per-tab "Mark all as read"
+- Updated unread count pushed via socket automatically
+- Can also be done via socket emit "notification:mark-all-read"
+
+================================================================================
+6. ARCHIVE NOTIFICATION
+================================================================================
+
+Method: DELETE
+URL: {BASE}/notification/:id
+Auth: Token Required
+
+Purpose: Archive a notification (soft-delete). Archived notifications are
+hidden from listings but not permanently deleted. The cron job permanently
+purges archived notifications older than 90 days.
+
+Path Parameters:
+- id (string, REQUIRED) — Notification ID
+
+Response (200):
+{
+  "success": true,
+  "message": "Notification archived",
+  "data": {
+    "id": "cuid_notif_1",
+    "isArchived": true,
+    ... (all fields)
+  }
+}
+
+Response (404):
+{
+  "success": false,
+  "message": "Notification not found"
+}
+
+Frontend Notes:
+- Use for swipe-to-dismiss or delete button on notification items
+- Archived notifications don't appear in GET /notification listings
+- Unread count updated via socket after archiving
+
+================================================================================
+7. CLEAR ARCHIVED
+================================================================================
+
+Method: DELETE
+URL: {BASE}/notification/clear
+Auth: Token Required
+
+Purpose: Permanently delete all archived notifications for the user.
+This is a destructive action and cannot be undone.
+
+Response (200):
+{
+  "success": true,
+  "message": "Archived notifications cleared",
+  "data": {
+    "deleted": 15
+  }
+}
+
+Frontend Notes:
+- Use for "Empty trash" / "Clear dismissed" functionality
+- data.deleted shows how many were permanently removed
+
+================================================================================
+8. GET NOTIFICATION PREFERENCES
+================================================================================
+
+Method: GET
+URL: {BASE}/notification/preferences
+Auth: Token Required
+
+Purpose: Get the user's notification channel preferences for all categories.
+Returns all 12 categories with their current settings. Categories without
+saved preferences return defaults (inApp: true, email: true, push: false).
+
+Response (200):
+{
+  "success": true,
+  "message": "Notification preferences fetched",
+  "data": [
+    { "category": "SOCIAL",      "inApp": true,  "email": true,  "push": false },
+    { "category": "COMMUNITY",   "inApp": true,  "email": true,  "push": false },
+    { "category": "MENTORSHIP",  "inApp": true,  "email": true,  "push": false },
+    { "category": "INCUBATION",  "inApp": true,  "email": true,  "push": false },
+    { "category": "STARTUP",     "inApp": true,  "email": true,  "push": false },
+    { "category": "JOB",         "inApp": true,  "email": true,  "push": false },
+    { "category": "EVENT",       "inApp": true,  "email": true,  "push": false },
+    { "category": "TASK",        "inApp": true,  "email": true,  "push": false },
+    { "category": "OFFICE",      "inApp": true,  "email": true,  "push": false },
+    { "category": "FUNDING",     "inApp": true,  "email": true,  "push": false },
+    { "category": "PAYMENT",     "inApp": true,  "email": true,  "push": false },
+    { "category": "SYSTEM",      "inApp": true,  "email": true,  "push": false }
+  ]
+}
+
+Frontend Notes:
+- Show as a settings page with toggles for each category/channel
+- inApp=false completely suppresses notifications for that category
+- email is additionally gated by the global emailNotifications toggle
+  in UserSettings (if global is off, email is off regardless)
+- push is reserved for future push notification support
+
+================================================================================
+9. UPDATE NOTIFICATION PREFERENCES
+================================================================================
+
+Method: PUT
+URL: {BASE}/notification/preferences
+Auth: Token Required
+
+Purpose: Update notification channel preferences for one or more categories.
+Only the categories included in the request are updated; others remain
+unchanged.
+
+Request Body:
+{
+  "preferences": [
+    { "category": "SOCIAL",     "inApp": true,  "email": false, "push": false },
+    { "category": "MENTORSHIP", "inApp": true,  "email": true,  "push": true  }
+  ]
+}
+
+Validation:
+- preferences: array, required, min 1 item
+- Each item requires: category (valid enum), inApp (boolean), email (boolean), push (boolean)
+
+Response (200):
+{
+  "success": true,
+  "message": "Notification preferences updated",
+  "data": [
+    { "category": "SOCIAL",      "inApp": true,  "email": false, "push": false },
+    { "category": "COMMUNITY",   "inApp": true,  "email": true,  "push": false },
+    { "category": "MENTORSHIP",  "inApp": true,  "email": true,  "push": true  },
+    ... (all 12 categories returned)
+  ]
+}
+
+Validation Error (400):
+{
+  "success": false,
+  "message": "Validation failed",
+  "errors": ["\"preferences[0].category\" must be one of [SOCIAL, COMMUNITY, ...]"]
+}
+
+================================================================================
+SOCKET.IO — REAL-TIME NOTIFICATIONS
+================================================================================
+
+Namespace: /notifications
+Transport: WebSocket with polling fallback
+
+--------------------------------------------------------------------------------
+CONNECTION & AUTHENTICATION
+--------------------------------------------------------------------------------
+
+Connect to the /notifications namespace:
+
+  const socket = io("{{SERVER_URL}}/notifications", {
+    auth: { token: "Bearer <jwt_token>" }
+  });
+
+The token can be either:
+  - An ecosystem User JWT
+  - An incubation portal JWT (userId is resolved internally via linked account)
+
+On successful connection:
+  - User auto-joins room "notifications:{userId}"
+  - Server immediately emits "notification:unread-count" with current counts
+
+On auth failure:
+  socket.on("connect_error", (err) => {
+    console.error(err.message);
+    // "Authentication error: No token provided"
+    // "Authentication error: User not found or not linked"
+    // "Authentication error: jwt expired"
+  });
+
+--------------------------------------------------------------------------------
+LISTEN EVENTS (Server -> Frontend)
+--------------------------------------------------------------------------------
+
+1. NEW NOTIFICATION
+   Event: "notification:new"
+   Payload: Full Notification object
+   {
+     "id": "cuid_notif_1",
+     "userId": "cuid_user_123",
+     "type": "SESSION_BOOKED",
+     "category": "MENTORSHIP",
+     "priority": "HIGH",
+     "title": "New Session Booking",
+     "message": "You have a new confirmed session booking",
+     "data": null,
+     "isRead": false,
+     "actionUrl": "/mentor/sessions/cuid_session_1",
+     "actorId": "cuid_user_456",
+     "actorName": null,
+     "actorAvatar": null,
+     "entityType": "MentorSession",
+     "entityId": "cuid_session_1",
+     "groupKey": null,
+     "createdAt": "2026-03-05T10:00:00Z"
+   }
+
+   Notes:
+   - Prepend this to the notification list in the frontend
+   - Show a toast/banner for HIGH and URGENT priority
+   - Use actionUrl for "click to view" navigation
+   - Play a notification sound if desired
+
+2. NOTIFICATION UPDATED (Grouped)
+   Event: "notification:updated"
+   Payload: Full updated Notification object
+   {
+     "id": "cuid_notif_2",
+     "type": "POST_LIKE",
+     "message": "Alice and 2 others liked your post",
+     "data": {
+       "actors": [
+         { "id": "cuid_a", "name": "Alice", "avatar": "..." },
+         { "id": "cuid_b", "name": "Bob", "avatar": null },
+         { "id": "cuid_c", "name": "Charlie", "avatar": null }
+       ],
+       "count": 3
+     },
+     ...
+   }
+
+   Notes:
+   - This replaces an existing notification in the list (match by id)
+   - Occurs when a grouped notification is updated (e.g., another like)
+   - Replace the notification with this id in your local state
+
+3. UNREAD COUNT
+   Event: "notification:unread-count"
+   Payload:
+   {
+     "total": 12,
+     "categories": {
+       "SOCIAL": 5,
+       "MENTORSHIP": 3,
+       "COMMUNITY": 2,
+       "SYSTEM": 2
+     }
+   }
+
+   Notes:
+   - Sent on initial connection
+   - Sent after every mark-as-read, mark-all-as-read, and archive action
+   - Use to update badge counts in real-time
+
+4. ERROR
+   Event: "error"
+   Payload: { "message": "Failed to mark notification as read" }
+
+--------------------------------------------------------------------------------
+EMIT EVENTS (Frontend -> Server)
+--------------------------------------------------------------------------------
+
+1. MARK SINGLE AS READ
+   Event: "notification:mark-read"
+   Payload: { "notificationId": "cuid_notif_1" }
+
+   Notes:
+   - Alternative to PATCH /notification/:id/read
+   - Server will respond with updated "notification:unread-count"
+   - No direct acknowledgment event; use unread-count update as confirmation
+
+2. MARK ALL AS READ
+   Event: "notification:mark-all-read"
+   Payload: { "category": "MENTORSHIP" }   // Optional, omit for all
+   Payload: {}                               // Mark ALL as read
+
+   Notes:
+   - Alternative to PATCH /notification/read-all
+   - Server will respond with updated "notification:unread-count"
+
+================================================================================
+NOTIFICATION BEHAVIOR RULES
+================================================================================
+
+1. SELF-NOTIFICATION SUPPRESSION
+   - If actorId === recipientId, the notification is silently dropped
+   - Example: liking your own post does not generate a notification
+
+2. BLOCK RESPECT
+   - If the recipient has blocked the actor (UserBlock), notification is dropped
+   - This uses the UserBlock table's blockerId_blockedId compound unique
+
+3. CHANNEL PREFERENCES
+   - inApp: false for a category = notification is not created at all
+   - email: false = notification created, but no email sent
+   - email is further gated by UserSettings.emailNotifications global toggle
+   - push: reserved for future use
+
+4. GROUPED NOTIFICATIONS
+   - Notifications with the same groupKey within 15 minutes are merged
+   - Only unread, non-archived notifications are eligible for grouping
+   - The message is rewritten: "Alice and 2 others liked your post"
+   - data.actors array tracks all contributing actors
+   - data.count tracks the total count
+   - Frontend receives "notification:updated" for merged notifications
+
+5. AUTOMATIC LIFECYCLE
+   - Notifications with expiresAt set are deleted by cron when expired (3 AM)
+   - Read notifications older than 30 days are auto-archived (3:30 AM)
+   - Archived notifications older than 90 days are permanently deleted (4 AM)
+   - Session reminders are sent 1 hour before (every 15 min cron)
+
+================================================================================
+COMPLETE FRONTEND FLOWS
+================================================================================
+
+Flow 1: Notification Bell / Dropdown
+  1. Connect to Socket.IO /notifications namespace on app load
+  2. Receive "notification:unread-count" on connection — set badge
+  3. Listen for "notification:new" — increment badge, show toast
+  4. Listen for "notification:updated" — update existing item
+  5. On bell click: GET /notification?page=1&limit=20
+  6. Render list with title, message, actorAvatar, time ago
+  7. Unread items get visual accent (bold/dot)
+  8. On notification click:
+     a. PATCH /notification/:id/read (or socket "notification:mark-read")
+     b. Navigate to actionUrl
+  9. "Mark all as read" button: PATCH /notification/read-all
+
+Flow 2: Full Notification Page with Category Tabs
+  1. GET /notification/unread-count — build tab badges
+  2. GET /notification?page=1&limit=20 — "All" tab
+  3. On tab change: GET /notification?category=MENTORSHIP&page=1&limit=20
+  4. Per-tab "Mark all as read": PATCH /notification/read-all { category }
+  5. Swipe/dismiss: DELETE /notification/:id (archive)
+  6. Infinite scroll: increment page param
+
+Flow 3: Notification Preferences Settings
+  1. GET /notification/preferences
+  2. Render toggles for each category: In-App | Email | Push
+  3. On toggle change: PUT /notification/preferences { preferences: [...] }
+  4. Show success toast on update
+
+Flow 4: Grouped Notification Display
+  1. Check if data.actors exists and data.count > 1
+  2. Show avatar stack (first 3 actors from data.actors)
+  3. Display aggregated message (e.g., "Alice and 2 others liked your post")
+  4. On click: navigate to actionUrl (the shared entity)
+
+Flow 5: Cleanup
+  1. Swipe-to-dismiss archives individual notifications
+  2. "Clear all dismissed" button: DELETE /notification/clear
+  3. Automatic cleanup happens via server cron — no frontend action needed
+
+================================================================================
+EMAIL TEMPLATES
+================================================================================
+
+The following notification types trigger email delivery (when email channel
+is enabled):
+
+| Type                       | Template File                          |
+|----------------------------|----------------------------------------|
+| SESSION_BOOKED             | notifications/session-booked.ejs       |
+| SESSION_CANCELLED          | notifications/session-cancelled.ejs    |
+| SESSION_REMINDER           | notifications/session-reminder.ejs     |
+| MENTORSHIP_REQUEST         | notifications/mentorship-request.ejs   |
+| APPLICATION_STATUS_CHANGED | notifications/application-status.ejs   |
+| TASK_ASSIGNED              | notifications/task-assigned.ejs        |
+| EVENT_REMINDER             | event-reminder.ejs                     |
+
+Other notification types are in-app only (no email template mapped).
+
+================================================================================
+MULTI-PORTAL IDENTITY RESOLUTION
+================================================================================
+
+All three portals (Ecosystem, Incubation, Startup) write to the same
+notification table using the ecosystem User.id as the userId.
+
+For Ecosystem users:
+  - req.user.id IS the User.id directly
+
+For Incubation portal users:
+  - req.user.id is the IncubationUser.id
+  - The controller resolves this to IncubationUser.userId (linked User.id)
+  - If IncubationUser.userId is null (not linked), returns 403
+
+For Startup portal users:
+  - req.user.id IS the User.id directly (authenticate middleware)
+  - Uses StartupNotificationController (identical logic to ecosystem)
+  - No userId resolution needed — startup members authenticate as ecosystem Users
+
+This means:
+  - A user logged into any portal sees the SAME notifications
+  - Notifications sent from the mentor module (which uses ecosystem User.id)
+    appear in all portals
+  - The Socket.IO namespace also resolves both token types to the same userId
+
+================================================================================
+ACTIVE NOTIFICATION TRIGGERS (as of v1.1.0)
+================================================================================
+
+The following services send notifications via NotificationService:
+
+Pattern Key:
+  send()        — Single recipient notification
+  sendBulk()    — Same notification to multiple recipients
+  sendGrouped() — Grouped/aggregated notification (merges within 15-min window)
+  All triggers use fire-and-forget: .catch(() => {})
+
+--- Social (user-social.service.js) ---
+  FOLLOW                 | sendGrouped | "started following you"
+  CONNECTION_REQUEST     | send        | "{name} wants to connect with you"
+  CONNECTION_ACCEPTED    | send        | "{name} accepted your connection request"
+
+--- Events (event-registration.service.js) ---
+  EVENT_REGISTRATION_CONFIRMED | sendBulk | "Your registration has been confirmed"
+  EVENT_WAITLIST_PROMOTED      | sendBulk | "You've been promoted from the waitlist"
+
+--- Jobs (job-application.service.js) ---
+  JOB_NEW_APPLICATION    | send    | "{name} applied for {job title}"
+
+--- Tasks (task.service.js) ---
+  TASK_ASSIGNED          | send    | "{name} assigned you the task {title}"
+  TASK_STATUS_CHANGED    | send    | "{name} changed task {title} status to {status}"
+
+--- Mentorship (mentorship.service.js) ---
+  MENTORSHIP_REQUEST     | send    | "You have received a new mentorship request"
+  MENTORSHIP_ACCEPTED    | send    | "Your mentorship request has been accepted"
+
+--- Sessions (session.service.js) ---
+  SESSION_BOOKED         | send    | "You have a new session booking"
+  SESSION_CONFIRMED      | send    | "Your mentoring session has been confirmed"
+  SESSION_DECLINED       | send    | "Your session request was declined: {reason}"
+  SESSION_NO_SHOW        | send    | "The mentor marked you as a no-show"
+  SESSION_REMINDER       | send    | "Your session starts in about 1 hour" (cron)
+
+--- Incubator (incubator-association.service.js) ---
+  INCUBATOR_INVITATION           | send | "Invitation from an incubator"
+  INCUBATOR_APPLICATION_APPROVED | send | "Your application has been approved"
+  INCUBATOR_APPLICATION_REJECTED | send | "Your application was rejected"
+
+--- Community (community-notification.service.js) ---
+  COMMUNITY_POST         | sendBulk | "A new post was shared in your community"
+  COMMUNITY_MENTION      | sendBulk | "You were mentioned in {community}"
+  COMMUNITY_COMMENT      | send     | Comment preview (max 100 chars)
+  COMMUNITY_JOIN_REQUEST | sendBulk | "{name} wants to join {community}"
+  COMMUNITY_JOIN_APPROVED| send     | "Your request to join {community} approved"
+  COMMUNITY_INVITE       | send     | "{name} invited you to join {community}"
+  SYSTEM (moderation)    | sendBulk | "A {type} has been reported in {community}"
+
+--- Community Engagement (community-engagement.service.js) ---
+  COMMUNITY_POST (like)    | sendGrouped | "liked your community post"
+  COMMUNITY_COMMENT        | sendGrouped | "commented on your community post"
+

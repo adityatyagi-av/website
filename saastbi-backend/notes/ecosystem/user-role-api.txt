@@ -1,0 +1,129 @@
+================================================================================
+USER ROLE API - ECOSYSTEM USER (POSTMAN READY)
+================================================================================
+
+Version: 1.0.0
+Last Updated: 2026-01-24
+Base URL: /api/ecosystem
+Authentication: User Bearer Token (authenticate middleware)
+
+================================================================================
+API QUICK REFERENCE - WHAT EACH API DOES
+================================================================================
+
+# USER ROLE MANAGEMENT
+| Endpoint                              | Method | Purpose                                    |
+|---------------------------------------|--------|--------------------------------------------|
+| /auth/roles                           | GET    | Get all roles assigned to user             |
+| /auth/roles                           | POST   | Add a new role (e.g. INVESTOR)             |
+| /auth/roles/:roleType                 | DELETE | Remove a role                              |
+
+================================================================================
+1. USER ROLE MANAGEMENT
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 GET USER ROLES
+--------------------------------------------------------------------------------
+Method: GET
+URL: {{BASE_URL}}/api/ecosystem/auth/roles
+Auth: User Token Required
+
+Purpose: Fetch all roles assigned to the currently authenticated user.
+
+Response (200):
+{
+  "success": true,
+  "message": "Roles fetched successfully.",
+  "data": [
+    {
+      "id": "uuid_user_role_1",
+      "roleType": "STUDENT",
+      "isPrimary": true,
+      "isVerified": false
+    },
+    {
+      "id": "uuid_user_role_2",
+      "roleType": "MENTOR",
+      "isPrimary": false,
+      "isVerified": true
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+1.2 ADD USER ROLE
+--------------------------------------------------------------------------------
+Method: POST
+URL: {{BASE_URL}}/api/ecosystem/auth/roles
+Auth: User Token Required
+
+Purpose: Add a new global role to the user profile.
+Supported Roles: STUDENT, PROFESSIONAL, FREELANCER, FOUNDER, MENTOR, INVESTOR, VC_PARTNER, INCUBATION_PERSON
+(Case insensitive input is supported, e.g. "mentor" -> "MENTOR")
+
+Request Body:
+{
+  "roleType": "INVESTOR"
+}
+
+Response (200):
+{
+  "success": true,
+  "message": "Role added successfully.",
+  "data": {
+    "userId": "uuid_user_1",
+    "roleType": "INVESTOR",
+    "isPrimary": false,
+    "isPublic": true,
+    "isVerified": false,
+    "id": "uuid_user_role_3",
+    "createdAt": "2026-01-24T..."
+  }
+}
+
+Error Response (400 - Invalid Role):
+{
+  "success": false,
+  "message": "Invalid role: ADMIN"
+}
+
+Error Response (409 - Role Exists):
+{
+  "success": false,
+  "message": "User already has this role"
+}
+
+--------------------------------------------------------------------------------
+1.3 REMOVE USER ROLE
+--------------------------------------------------------------------------------
+Method: DELETE
+URL: {{BASE_URL}}/api/ecosystem/auth/roles/:roleType
+Auth: User Token Required
+
+Purpose: Remove a specific role from the user.
+Note: You cannot remove your PRIMARY role.
+
+Path Parameters:
+- roleType (string, required) - e.g. INVESTOR
+
+Response (200):
+{
+  "success": true,
+  "message": "Role removed successfully.",
+  "data": {
+    "message": "Role removed successfully"
+  }
+}
+
+Error Response (404 - Role Not Found):
+{
+  "success": false,
+  "message": "Role not found for this user"
+}
+
+Error Response (400 - Primary Role):
+{
+  "success": false,
+  "message": "Cannot remove primary role. Please change primary role first."
+}
